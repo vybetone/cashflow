@@ -1,0 +1,7 @@
+{
+  "name": "Cash Flow AI",
+  "description": "Real-time AI trading chart assistant for screen & camera analysis, pattern recognition, smart trading signals, overlay HUD, and trade journal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
