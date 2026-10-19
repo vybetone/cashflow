@@ -361,4 +361,80 @@ class BrokerSafetyRegressionTest {
         assertNotNull(validCrypto)
         assertEquals(82450.50, validCrypto!!, 0.01)
     }
+
+    @Test
+    fun testExecuteTrade_rejectsDuplicateOrderWithinCooldown() = testScope.runTest {
+        var firstSuccess = false
+        var secondSuccess = true
+        var secondMsg = ""
+
+        // First trade
+        brokerManager.executeTrade(
+            symbol = "ETH/USD",
+            side = "BUY",
+            entryPrice = 3500.0,
+            stopLoss = 3400.0,
+            takeProfit = 3700.0,
+            volume = 0.1
+        ) { success, _, _ ->
+            firstSuccess = success
+        }
+        advanceUntilIdle()
+        assertTrue(firstSuccess)
+
+        // Immediate second trade with exact same symbol and side
+        brokerManager.executeTrade(
+            symbol = "ETH/USD",
+            side = "BUY",
+            entryPrice = 3500.0,
+            stopLoss = 3400.0,
+            takeProfit = 3700.0,
+            volume = 0.1
+        ) { success, msg, _ ->
+            secondSuccess = success
+            secondMsg = msg
+        }
+        advanceUntilIdle()
+
+        assertFalse("Duplicate order must be rejected within cooldown", secondSuccess)
+        assertTrue(secondMsg.contains("Duplicate order detected"))
+    }
+
+    @Test
+    fun testExecuteTrade_rejectsInsufficientFreeMargin() = testScope.runTest {
+        val lowMarginAccount = BrokerAccountEntity(
+            id = 2,
+            brokerType = "PAPER_TRADING",
+            accountName = "Low Margin",
+            accountId = "VIRTUAL-LOW",
+            apiTokenOrPassword = "pass",
+            serverOrEndpoint = "sandbox",
+            freeMargin = 5.0 // Insufficient for volume = 0.5 (needs 50.0)
+        )
+
+        brokerManager.connect(lowMarginAccount) { _, _ -> }
+        advanceUntilIdle()
+        brokerManager.stopAllSimulation()
+
+        var tradeSuccess = true
+        var tradeMsg = ""
+
+        brokerManager.executeTrade(
+            symbol = "BTC/USD",
+            side = "BUY",
+            entryPrice = 85000.0,
+            stopLoss = 84000.0,
+            takeProfit = 87000.0,
+            volume = 0.5 // requires 0.5 * 100 = 50.0 margin > 5.0 free margin
+        ) { success, msg, _ ->
+            tradeSuccess = success
+            tradeMsg = msg
+        }
+        advanceUntilIdle()
+
+        assertFalse("Trade must be rejected when free margin is insufficient", tradeSuccess)
+        assertTrue(tradeMsg.contains("Insufficient free margin"))
+        brokerManager.stopAllSimulation()
+    }
 }
+

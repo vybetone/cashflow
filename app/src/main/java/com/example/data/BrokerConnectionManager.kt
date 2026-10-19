@@ -31,8 +31,44 @@ class BrokerConnectionManager(
     private val _executionLogs = MutableStateFlow<List<BrokerExecutionLog>>(emptyList())
     val executionLogs: StateFlow<List<BrokerExecutionLog>> = _executionLogs.asStateFlow()
 
+    var onAccountUpdated: ((BrokerAccountEntity) -> Unit)? = null
+
     private var heartbeatJob: Job? = null
     private var priceUpdateJob: Job? = null
+
+    companion object {
+        fun getUtcDayStartTimestamp(epochMillis: Long = System.currentTimeMillis()): Long {
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+            calendar.timeInMillis = epochMillis
+            calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            calendar.set(java.util.Calendar.MINUTE, 0)
+            calendar.set(java.util.Calendar.SECOND, 0)
+            calendar.set(java.util.Calendar.MILLISECOND, 0)
+            return calendar.timeInMillis
+        }
+
+        fun checkAndRolloverDailyLoss(
+            account: BrokerAccountEntity,
+            currentTimeMillis: Long = System.currentTimeMillis()
+        ): BrokerAccountEntity {
+            val currentDayStart = getUtcDayStartTimestamp(currentTimeMillis)
+            val accountDayStart = if (account.dailyLossResetTimestamp > 0L) {
+                getUtcDayStartTimestamp(account.dailyLossResetTimestamp)
+            } else {
+                0L
+            }
+
+            return if (currentDayStart > accountDayStart) {
+                account.copy(
+                    dailyRealizedLoss = 0.0,
+                    isCircuitBreakerTripped = false,
+                    dailyLossResetTimestamp = currentDayStart
+                )
+            } else {
+                account
+            }
+        }
+    }
 
     init {
         // Initialize with default demo paper positions to illustrate
@@ -81,7 +117,11 @@ class BrokerConnectionManager(
             val success = account.accountId.isNotBlank()
 
             if (success) {
-                _connectedAccount.value = account.copy(isConnected = true)
+                val rolled = checkAndRolloverDailyLoss(account)
+                if (rolled != account) {
+                    onAccountUpdated?.invoke(rolled)
+                }
+                _connectedAccount.value = rolled.copy(isConnected = true)
                 _connectionStatus.value = if (isDemo) "CONNECTED_DEMO" else "CONNECTED_PAPER"
                 _currentPingMs.value = Random.nextLong(18, 45)
 
@@ -139,9 +179,50 @@ class BrokerConnectionManager(
         onComplete: (Boolean, String, BrokerPosition?) -> Unit
     ) {
         scope.launch {
-            val account = _connectedAccount.value
+            val rawAccount = _connectedAccount.value
+            val account = if (rawAccount != null) {
+                val rolled = checkAndRolloverDailyLoss(rawAccount)
+                if (rolled != rawAccount) {
+                    _connectedAccount.value = rolled
+                    onAccountUpdated?.invoke(rolled)
+                }
+                rolled
+            } else null
+
             val brokerName = account?.brokerType ?: "PAPER_TRADING"
             val accountId = account?.accountId ?: "VIRTUAL-001"
+
+            // Circuit Breaker: Enforce daily loss limit
+            if (account != null && account.dailyLossLimit > 0.0) {
+                val isTripped = account.isCircuitBreakerTripped || account.dailyRealizedLoss >= account.dailyLossLimit
+                if (isTripped) {
+                    val err = "Execution rejected: Daily-loss circuit breaker is active for $brokerName (Realized loss: $${String.format(java.util.Locale.US, "%.2f", account.dailyRealizedLoss)} >= Limit: $${String.format(java.util.Locale.US, "%.2f", account.dailyLossLimit)}). Trading halted for current session."
+                    addLog(brokerName, "CIRCUIT_BREAKER_BLOCKED", err, false)
+                    onComplete(false, err, null)
+                    return@launch
+                }
+            }
+
+            // 0. Duplicate order check within 5-second cooldown on same symbol and side
+            val normalizedSide = side.trim().uppercase()
+            val isDuplicate = _openPositions.value.any {
+                it.symbol == symbol && it.side == normalizedSide && (System.currentTimeMillis() - it.openTime) < 5_000L
+            }
+            if (isDuplicate) {
+                val err = "Execution rejected: Duplicate order detected on $symbol ($normalizedSide) within cooldown period."
+                addLog(brokerName, "ORDER_REJECTED", err, false)
+                onComplete(false, err, null)
+                return@launch
+            }
+
+            // Check sufficient free margin if account is connected
+            val requiredMargin = volume * 100.0
+            if (account != null && account.freeMargin < requiredMargin) {
+                val err = "Execution rejected: Insufficient free margin ($${String.format(java.util.Locale.US, "%.2f", account.freeMargin)} < required $${String.format(java.util.Locale.US, "%.2f", requiredMargin)})."
+                addLog(brokerName, "ORDER_REJECTED", err, false)
+                onComplete(false, err, null)
+                return@launch
+            }
 
             // 1. Validate entryPrice
             if (entryPrice <= 0.0 || entryPrice.isNaN() || entryPrice.isInfinite()) {
@@ -169,7 +250,6 @@ class BrokerConnectionManager(
             }
 
             // 4. Validate brackets per existing trade model
-            val normalizedSide = side.trim().uppercase()
             if (normalizedSide == "BUY") {
                 if (stopLoss >= entryPrice || takeProfit <= entryPrice) {
                     val err = "Execution rejected: Invalid BUY brackets. Stop-loss ($stopLoss) must be below entry ($entryPrice) and take-profit ($takeProfit) above entry."
@@ -230,20 +310,42 @@ class BrokerConnectionManager(
         scope.launch {
             val pos = _openPositions.value.find { it.ticketId == ticketId }
             if (pos != null) {
-                val pnl = pos.unrealizedPnL
+                val rawPnl = pos.unrealizedPnL
+                val pnl = if (rawPnl.isNaN() || rawPnl.isInfinite()) 0.0 else rawPnl
                 val updated = _openPositions.value.filter { it.ticketId != ticketId }
                 _openPositions.value = updated
 
-                // Credit PnL to connected account
-                _connectedAccount.value?.let { acc ->
+                // Credit PnL to connected account and update daily-loss tracking
+                _connectedAccount.value?.let { currentAcc ->
+                    val acc = checkAndRolloverDailyLoss(currentAcc)
                     val newBalance = acc.balance + pnl
                     val newEquity = acc.equity + pnl
                     val newMargin = acc.freeMargin + (pos.volume * 100) + pnl
-                    _connectedAccount.value = acc.copy(
+
+                    // Only realized losses increase dailyRealizedLoss; winning trades never erase prior losses
+                    val lossIncrement = if (pnl < 0.0) abs(pnl) else 0.0
+                    val updatedRealizedLoss = acc.dailyRealizedLoss + lossIncrement
+                    val circuitBreakerTripped = acc.isCircuitBreakerTripped || (acc.dailyLossLimit > 0.0 && updatedRealizedLoss >= acc.dailyLossLimit)
+
+                    val updatedAcc = acc.copy(
                         balance = newBalance,
                         equity = newEquity,
-                        freeMargin = newMargin
+                        freeMargin = newMargin,
+                        dailyRealizedLoss = updatedRealizedLoss,
+                        isCircuitBreakerTripped = circuitBreakerTripped,
+                        dailyLossResetTimestamp = if (acc.dailyLossResetTimestamp <= 0L) getUtcDayStartTimestamp() else acc.dailyLossResetTimestamp
                     )
+                    _connectedAccount.value = updatedAcc
+                    onAccountUpdated?.invoke(updatedAcc)
+
+                    if (circuitBreakerTripped && !acc.isCircuitBreakerTripped) {
+                        addLog(
+                            acc.brokerType,
+                            "CIRCUIT_BREAKER_TRIPPED",
+                            "Daily-loss circuit breaker TRIPPED! Realized loss $${String.format(java.util.Locale.US, "%.2f", updatedRealizedLoss)} >= Limit $${String.format(java.util.Locale.US, "%.2f", acc.dailyLossLimit)}. New paper orders blocked.",
+                            false
+                        )
+                    }
                 }
 
                 val pnlText = if (pnl >= 0) "+$${String.format(java.util.Locale.US, "%.2f", pnl)}" else "-$${String.format(java.util.Locale.US, "%.2f", abs(pnl))}"
@@ -259,20 +361,68 @@ class BrokerConnectionManager(
         scope.launch {
             val list = _openPositions.value
             val count = list.size
-            val totalPnL = list.sumOf { it.unrealizedPnL }
+            if (count == 0) {
+                onComplete(0, 0.0)
+                return@launch
+            }
 
+            val totalPnL = list.sumOf {
+                val p = it.unrealizedPnL
+                if (p.isNaN() || p.isInfinite()) 0.0 else p
+            }
             _openPositions.value = emptyList()
 
-            _connectedAccount.value?.let { acc ->
-                _connectedAccount.value = acc.copy(
+            _connectedAccount.value?.let { currentAcc ->
+                val acc = checkAndRolloverDailyLoss(currentAcc)
+                val totalLossIncrement = list.sumOf { pos ->
+                    val p = pos.unrealizedPnL
+                    val safeP = if (p.isNaN() || p.isInfinite()) 0.0 else p
+                    if (safeP < 0.0) abs(safeP) else 0.0
+                }
+                val updatedRealizedLoss = acc.dailyRealizedLoss + totalLossIncrement
+                val circuitBreakerTripped = acc.isCircuitBreakerTripped || (acc.dailyLossLimit > 0.0 && updatedRealizedLoss >= acc.dailyLossLimit)
+
+                val updatedAcc = acc.copy(
                     balance = acc.balance + totalPnL,
                     equity = acc.equity + totalPnL,
-                    freeMargin = acc.balance + totalPnL
+                    freeMargin = acc.balance + totalPnL,
+                    dailyRealizedLoss = updatedRealizedLoss,
+                    isCircuitBreakerTripped = circuitBreakerTripped,
+                    dailyLossResetTimestamp = if (acc.dailyLossResetTimestamp <= 0L) getUtcDayStartTimestamp() else acc.dailyLossResetTimestamp
                 )
+                _connectedAccount.value = updatedAcc
+                onAccountUpdated?.invoke(updatedAcc)
+
+                if (circuitBreakerTripped && !acc.isCircuitBreakerTripped) {
+                    addLog(
+                        acc.brokerType,
+                        "CIRCUIT_BREAKER_TRIPPED",
+                        "Daily-loss circuit breaker TRIPPED on Emergency Close All! Realized loss $${String.format(java.util.Locale.US, "%.2f", updatedRealizedLoss)} >= Limit $${String.format(java.util.Locale.US, "%.2f", acc.dailyLossLimit)}. New paper orders blocked.",
+                        false
+                    )
+                }
             }
 
             addLog("BROKER", "CLOSE_ALL", "Emergency closed all $count open positions. Total PnL: $$totalPnL", true)
             onComplete(count, totalPnL)
+        }
+    }
+
+    fun resetDailyLoss(reason: String = "Manual User Reset") {
+        _connectedAccount.value?.let { acc ->
+            val updated = acc.copy(
+                dailyRealizedLoss = 0.0,
+                isCircuitBreakerTripped = false,
+                dailyLossResetTimestamp = getUtcDayStartTimestamp()
+            )
+            _connectedAccount.value = updated
+            onAccountUpdated?.invoke(updated)
+            addLog(
+                acc.brokerType,
+                "CIRCUIT_BREAKER_RESET",
+                "Daily-loss circuit breaker reset ($reason). Previous realized loss: $${String.format(java.util.Locale.US, "%.2f", acc.dailyRealizedLoss)}.",
+                true
+            )
         }
     }
 

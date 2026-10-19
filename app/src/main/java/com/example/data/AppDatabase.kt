@@ -14,7 +14,7 @@ import androidx.room.TypeConverters
         BudgetEntity::class,
         BrokerAccountEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -29,6 +29,15 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE broker_accounts ADD COLUMN dailyLossLimit REAL NOT NULL DEFAULT 500.0")
+                db.execSQL("ALTER TABLE broker_accounts ADD COLUMN dailyRealizedLoss REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE broker_accounts ADD COLUMN dailyLossResetTimestamp INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE broker_accounts ADD COLUMN isCircuitBreakerTripped INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -36,7 +45,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "cashflow_database"
                 )
-                .fallbackToDestructiveMigration(true)
+                .addMigrations(MIGRATION_4_5)
+                .fallbackToDestructiveMigration(false)
                 .build()
                 INSTANCE = instance
                 instance

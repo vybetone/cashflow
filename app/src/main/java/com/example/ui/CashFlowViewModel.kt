@@ -225,6 +225,12 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
+        brokerConnectionManager.onAccountUpdated = { updatedAcc ->
+            viewModelScope.launch {
+                repository.updateBrokerAccount(updatedAcc)
+            }
+        }
+
         allSignals = repository.allSignals.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
@@ -831,7 +837,13 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun updateBrokerRiskSettings(threshold: Int, lotSize: Double, maxRisk: Double, autoSlTp: Boolean) {
+    fun updateBrokerRiskSettings(
+        threshold: Int,
+        lotSize: Double,
+        maxRisk: Double,
+        autoSlTp: Boolean,
+        dailyLossLimit: Double? = null
+    ) {
         viewModelScope.launch {
             val current = activeBrokerAccount.value
             if (current != null) {
@@ -839,7 +851,8 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
                     minConfidenceThreshold = threshold,
                     defaultLotSize = lotSize,
                     maxRiskPercentage = maxRisk,
-                    autoStopLossTakeProfit = autoSlTp
+                    autoStopLossTakeProfit = autoSlTp,
+                    dailyLossLimit = dailyLossLimit ?: current.dailyLossLimit
                 )
                 repository.updateBrokerAccount(updated)
                 _brokerFeedbackMessage.value = "Broker risk parameters updated."
@@ -847,7 +860,23 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun resetBrokerDailyLossCircuitBreaker() {
+        brokerConnectionManager.resetDailyLoss("Manual UI Reset")
+        _brokerFeedbackMessage.value = "Daily-loss circuit breaker reset."
+    }
+
     fun executeSignalOnBroker(signal: TradingSignalEntity, overrideVolume: Double? = null) {
+        if (signal.action != "BUY" && signal.action != "SELL") {
+            _brokerFeedbackMessage.value = "Execution rejected: Signal action is '${signal.action}'. Only BUY or SELL can be executed."
+            return
+        }
+
+        val active = activeBrokerAccount.value
+        if (active != null && active.dailyLossLimit > 0.0 && (active.isCircuitBreakerTripped || active.dailyRealizedLoss >= active.dailyLossLimit)) {
+            _brokerFeedbackMessage.value = "Execution rejected: Daily-loss circuit breaker is active for ${active.brokerType} (Realized loss: $${String.format(java.util.Locale.US, "%.2f", active.dailyRealizedLoss)} >= Limit: $${String.format(java.util.Locale.US, "%.2f", active.dailyLossLimit)}). Trading halted for current session."
+            return
+        }
+
         val quote = marketDataEngine.getQuoteForSymbol(signal.symbol)
         val isQuoteValid = !quote.isStale &&
             quote.lastPrice > 0.0 &&
@@ -865,7 +894,6 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        val active = activeBrokerAccount.value
         val volume = overrideVolume ?: active?.defaultLotSize ?: 0.10
         val slPrice = parseValidPriceOrNull(signal.stopLoss) ?: if (signal.action == "SELL") entryPrice * 1.01 else entryPrice * 0.99
         val tpPrice = parseValidPriceOrNull(signal.takeProfit) ?: if (signal.action == "SELL") entryPrice * 0.98 else entryPrice * 1.02
@@ -905,6 +933,12 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun executeManualTrade(symbol: String, side: String, entryPrice: Double, sl: Double, tp: Double, volume: Double) {
+        val active = activeBrokerAccount.value
+        if (active != null && active.dailyLossLimit > 0.0 && (active.isCircuitBreakerTripped || active.dailyRealizedLoss >= active.dailyLossLimit)) {
+            _brokerFeedbackMessage.value = "Execution rejected: Daily-loss circuit breaker is active for ${active.brokerType}."
+            return
+        }
+
         brokerConnectionManager.executeTrade(
             symbol = symbol,
             side = side,
@@ -938,6 +972,21 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
         brokerConnectionManager.closePosition(ticketId) { success, pnl ->
             val pnlFormatted = if (pnl >= 0) "+$${String.format(java.util.Locale.US, "%.2f", pnl)}" else "-$${String.format(java.util.Locale.US, "%.2f", Math.abs(pnl))}"
             _brokerFeedbackMessage.value = if (success) "Position #$ticketId closed. P&L: $pnlFormatted" else "Position close failed."
+            if (success) {
+                viewModelScope.launch {
+                    val openTrades = allJournalTrades.value
+                    val matching = openTrades.find { it.notes.contains(ticketId) && it.status == "OPEN" }
+                    if (matching != null) {
+                        val closedStatus = if (pnl >= 0) "CLOSED_WIN" else "CLOSED_LOSS"
+                        val updated = matching.copy(
+                            status = closedStatus,
+                            pnl = pnl,
+                            notes = matching.notes + " | Closed: $pnlFormatted"
+                        )
+                        repository.updateJournalTrade(updated)
+                    }
+                }
+            }
         }
     }
 

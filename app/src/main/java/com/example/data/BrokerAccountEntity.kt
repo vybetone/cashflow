@@ -38,7 +38,11 @@ data class BrokerAccountEntity(
     val defaultLotSize: Double = 0.05,
     val maxRiskPercentage: Double = 1.0,
     val autoStopLossTakeProfit: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val dailyLossLimit: Double = 500.0,
+    val dailyRealizedLoss: Double = 0.0,
+    val dailyLossResetTimestamp: Long = 0L,
+    val isCircuitBreakerTripped: Boolean = false
 )
 
 data class BrokerPosition(

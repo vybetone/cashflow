@@ -77,7 +77,9 @@ open class ForexHistoricalDataProvider(
 
             // Fallback to Alpha Vantage only if an explicit API key is configured (never use hardcoded demo key)
             val avKey = alphaVantageApiKey?.trim()
+            var avAttempted = false
             if (timeframe == "1d" && !avKey.isNullOrBlank()) {
+                avAttempted = true
                 val result = tryAlphaVantageForex(symbol, limit, avKey)
                 if (result is PriceHistoryResult.Success) {
                     return@withContext result
@@ -85,7 +87,7 @@ open class ForexHistoricalDataProvider(
             }
 
             // If Finnhub failed with a specific error and no AV was attempted, return Finnhub's failure
-            if (finnhubFailure != null && avKey.isNullOrBlank()) {
+            if (finnhubFailure != null && !avAttempted) {
                 return@withContext finnhubFailure
             }
 

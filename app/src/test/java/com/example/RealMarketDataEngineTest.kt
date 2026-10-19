@@ -604,7 +604,8 @@ class RealMarketDataEngineTest {
 
         val provider = ForexHistoricalDataProvider(
             client = mockClient,
-            finnhubApiKey = "valid_key"
+            finnhubApiKey = "valid_key",
+            alphaVantageApiKey = null
         )
 
         val result = provider.fetchForexHistory("EUR/USD", "1h", 60)
