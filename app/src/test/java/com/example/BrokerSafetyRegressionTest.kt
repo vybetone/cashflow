@@ -436,5 +436,216 @@ class BrokerSafetyRegressionTest {
         assertTrue(tradeMsg.contains("Insufficient free margin"))
         brokerManager.stopAllSimulation()
     }
+
+    @Test
+    fun testExecuteTrade_rejectsWhenDailyLossCircuitBreakerTripped() = testScope.runTest {
+        val todayStart = BrokerConnectionManager.getUtcDayStartTimestamp()
+        val trippedAccount = BrokerAccountEntity(
+            id = 10,
+            brokerType = "PAPER_TRADING",
+            accountName = "Tripped Account",
+            accountId = "VIRTUAL-TRIPPED",
+            apiTokenOrPassword = "token",
+            serverOrEndpoint = "sandbox",
+            dailyLossLimit = 300.0,
+            dailyRealizedLoss = 350.0,
+            dailyLossResetTimestamp = todayStart,
+            isCircuitBreakerTripped = true
+        )
+        brokerManager.connect(trippedAccount) { _, _ -> }
+        advanceUntilIdle()
+        brokerManager.stopAllSimulation()
+
+        var success = true
+        var message = ""
+        brokerManager.executeTrade(
+            symbol = "EUR/USD",
+            side = "BUY",
+            entryPrice = 1.0850,
+            stopLoss = 1.0800,
+            takeProfit = 1.0950,
+            volume = 0.05
+        ) { ok, msg, _ ->
+            success = ok
+            message = msg
+        }
+        advanceUntilIdle()
+
+        assertFalse("Trade must be rejected when circuit breaker is tripped", success)
+        assertTrue(message.contains("Daily-loss circuit breaker is active"))
+        brokerManager.stopAllSimulation()
+    }
+
+    @Test
+    fun testClosePosition_tripsCircuitBreakerWhenDailyLossExceeded() = testScope.runTest {
+        val todayStart = BrokerConnectionManager.getUtcDayStartTimestamp()
+        val account = BrokerAccountEntity(
+            id = 11,
+            brokerType = "DERIV",
+            accountName = "Risk Account",
+            accountId = "CR-194821",
+            apiTokenOrPassword = "token",
+            serverOrEndpoint = "sandbox",
+            dailyLossLimit = 20.0, // Limit is $20.00
+            dailyRealizedLoss = 0.0,
+            dailyLossResetTimestamp = todayStart,
+            isCircuitBreakerTripped = false
+        )
+        brokerManager.connect(account) { _, _ -> }
+        advanceUntilIdle()
+        brokerManager.stopAllSimulation()
+
+        // Explicitly set unrealizedPnL on POS-91824 to -$50.00 (loss > $20.00 limit)
+        brokerManager.updatePositionPnLForTesting("POS-91824", -50.0)
+
+        var closeSuccess = false
+        var closedPnl = 0.0
+        brokerManager.closePosition("POS-91824") { ok, pnl ->
+            closeSuccess = ok
+            closedPnl = pnl
+        }
+        advanceUntilIdle()
+
+        assertTrue(closeSuccess)
+        assertEquals(-50.0, closedPnl, 0.01)
+
+        val updated = brokerManager.connectedAccount.value
+        assertNotNull(updated)
+        assertEquals(50.0, updated!!.dailyRealizedLoss, 0.01)
+        assertTrue("Circuit breaker must trip when daily realized loss exceeds limit", updated.isCircuitBreakerTripped)
+
+        // Verify subsequent trade is blocked
+        var tradeBlocked = false
+        brokerManager.executeTrade(
+            symbol = "EUR/USD",
+            side = "BUY",
+            entryPrice = 1.0850,
+            stopLoss = 1.0800,
+            takeProfit = 1.0950,
+            volume = 0.05
+        ) { ok, msg, _ ->
+            tradeBlocked = !ok
+        }
+        advanceUntilIdle()
+        assertTrue("Subsequent trade must be blocked by tripped circuit breaker", tradeBlocked)
+        brokerManager.stopAllSimulation()
+    }
+
+    @Test
+    fun testClosePosition_winningTradeDoesNotErasePriorRealizedLoss() = testScope.runTest {
+        val todayStart = BrokerConnectionManager.getUtcDayStartTimestamp()
+        val account = BrokerAccountEntity(
+            id = 12,
+            brokerType = "DERIV",
+            accountName = "Winning Check Account",
+            accountId = "CR-194821",
+            apiTokenOrPassword = "token",
+            serverOrEndpoint = "sandbox",
+            dailyLossLimit = 100.0,
+            dailyRealizedLoss = 45.0,
+            dailyLossResetTimestamp = todayStart,
+            isCircuitBreakerTripped = false
+        )
+        brokerManager.connect(account) { _, _ -> }
+        advanceUntilIdle()
+        brokerManager.stopAllSimulation()
+
+        // Set unrealizedPnL on POS-73910 to +35.00 (winning trade)
+        brokerManager.updatePositionPnLForTesting("POS-73910", 35.0)
+
+        var closeSuccess = false
+        var closedPnl = 0.0
+        brokerManager.closePosition("POS-73910") { ok, pnl ->
+            closeSuccess = ok
+            closedPnl = pnl
+        }
+        advanceUntilIdle()
+
+        assertTrue(closeSuccess)
+        assertEquals(35.0, closedPnl, 0.01)
+
+        val updated = brokerManager.connectedAccount.value
+        assertNotNull(updated)
+        // Winning trades must NEVER erase prior daily realized loss
+        assertEquals(45.0, updated!!.dailyRealizedLoss, 0.01)
+        assertFalse(updated.isCircuitBreakerTripped)
+        brokerManager.stopAllSimulation()
+    }
+
+    @Test
+    fun testResetDailyLoss_clearsCircuitBreaker() = testScope.runTest {
+        val todayStart = BrokerConnectionManager.getUtcDayStartTimestamp()
+        val trippedAccount = BrokerAccountEntity(
+            id = 13,
+            brokerType = "PAPER_TRADING",
+            accountName = "To Reset",
+            accountId = "VIRTUAL-RESET",
+            apiTokenOrPassword = "token",
+            serverOrEndpoint = "sandbox",
+            dailyLossLimit = 100.0,
+            dailyRealizedLoss = 150.0,
+            dailyLossResetTimestamp = todayStart,
+            isCircuitBreakerTripped = true
+        )
+        brokerManager.connect(trippedAccount) { _, _ -> }
+        advanceUntilIdle()
+        brokerManager.stopAllSimulation()
+
+        brokerManager.resetDailyLoss("Manual Test Reset")
+        advanceUntilIdle()
+
+        val resetAcc = brokerManager.connectedAccount.value
+        assertNotNull(resetAcc)
+        assertEquals(0.0, resetAcc!!.dailyRealizedLoss, 0.001)
+        assertFalse(resetAcc.isCircuitBreakerTripped)
+
+        // After reset, a trade must succeed
+        var tradeSuccess = false
+        brokerManager.executeTrade(
+            symbol = "EUR/USD",
+            side = "BUY",
+            entryPrice = 1.0850,
+            stopLoss = 1.0800,
+            takeProfit = 1.0950,
+            volume = 0.05
+        ) { ok, _, _ ->
+            tradeSuccess = ok
+        }
+        advanceUntilIdle()
+        assertTrue("Trade must succeed after circuit breaker reset", tradeSuccess)
+        brokerManager.stopAllSimulation()
+    }
+
+    @Test
+    fun testRolloverDailyLoss_resetsOnNewUtcDay() {
+        val day1Millis = 1776518400000L // 2026-04-18 00:00:00 UTC
+        val day1Start = BrokerConnectionManager.getUtcDayStartTimestamp(day1Millis)
+
+        val account = BrokerAccountEntity(
+            id = 14,
+            brokerType = "PAPER_TRADING",
+            accountName = "Rollover Account",
+            accountId = "VIRTUAL-ROLL",
+            apiTokenOrPassword = "token",
+            serverOrEndpoint = "sandbox",
+            dailyLossLimit = 200.0,
+            dailyRealizedLoss = 250.0,
+            dailyLossResetTimestamp = day1Start,
+            isCircuitBreakerTripped = true
+        )
+
+        // Same day: 2 hours later
+        val sameDayLater = day1Millis + 7200000L
+        val sameDayResult = BrokerConnectionManager.checkAndRolloverDailyLoss(account, sameDayLater)
+        assertEquals(250.0, sameDayResult.dailyRealizedLoss, 0.001)
+        assertTrue(sameDayResult.isCircuitBreakerTripped)
+
+        // Next UTC day: 26 hours later
+        val nextDayMillis = day1Millis + 93600000L
+        val nextDayResult = BrokerConnectionManager.checkAndRolloverDailyLoss(account, nextDayMillis)
+        assertEquals(0.0, nextDayResult.dailyRealizedLoss, 0.001)
+        assertFalse(nextDayResult.isCircuitBreakerTripped)
+        assertEquals(BrokerConnectionManager.getUtcDayStartTimestamp(nextDayMillis), nextDayResult.dailyLossResetTimestamp)
+    }
 }
 

@@ -357,6 +357,15 @@ class BrokerConnectionManager(
         }
     }
 
+    fun updatePositionPnLForTesting(ticketId: String, pnl: Double) {
+        val list = _openPositions.value.toMutableList()
+        val idx = list.indexOfFirst { it.ticketId == ticketId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(unrealizedPnL = pnl)
+            _openPositions.value = list
+        }
+    }
+
     fun closeAllPositions(onComplete: (Int, Double) -> Unit) {
         scope.launch {
             val list = _openPositions.value

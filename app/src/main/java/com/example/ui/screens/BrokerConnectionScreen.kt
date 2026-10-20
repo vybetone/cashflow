@@ -260,9 +260,10 @@ fun BrokerConnectionScreen(
                         marketUniverse = autoTradeUniverse,
                         onSelectMarketUniverse = { viewModel.setAutoTradeMarketUniverse(it) },
                         onToggleAutoTrade = { viewModel.toggleBrokerAutoTrade(it) },
-                        onUpdateRisk = { threshold, lotSize, maxRisk, slTp ->
-                            viewModel.updateBrokerRiskSettings(threshold, lotSize, maxRisk, slTp)
+                        onUpdateRisk = { threshold, lotSize, maxRisk, slTp, dailyLimit ->
+                            viewModel.updateBrokerRiskSettings(threshold, lotSize, maxRisk, slTp, dailyLimit)
                         },
+                        onResetCircuitBreaker = { viewModel.resetBrokerDailyLossCircuitBreaker() },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -321,7 +322,9 @@ private fun BrokerHeaderCard(
     modifier: Modifier = Modifier
 ) {
     val isConnected = connectionStatus.startsWith("CONNECTED")
-    val statusColor = when (connectionStatus) {
+    val isBreakerTripped = activeAccount != null && activeAccount.dailyLossLimit > 0.0 &&
+        (activeAccount.isCircuitBreakerTripped || activeAccount.dailyRealizedLoss >= activeAccount.dailyLossLimit)
+    val statusColor = if (isBreakerTripped) Color(0xFFFF5252) else when (connectionStatus) {
         "CONNECTED_LIVE", "CONNECTED_PAPER" -> Color(0xFF00E5FF)
         "CONNECTED_DEMO" -> Color(0xFF00E5FF)
         "CONNECTING" -> Color(0xFFFFB300)
@@ -333,7 +336,7 @@ private fun BrokerHeaderCard(
         modifier = modifier.testTag("broker_header_card"),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF131822)),
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, if (isConnected) statusColor.copy(alpha = 0.5f) else Color(0xFF263238))
+        border = BorderStroke(1.dp, if (isBreakerTripped) Color(0xFFFF5252) else if (isConnected) statusColor.copy(alpha = 0.5f) else Color(0xFF263238))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             // Row 1: Broker Name & Status Badge
@@ -393,11 +396,12 @@ private fun BrokerHeaderCard(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = when (connectionStatus) {
-                                    "CONNECTED_LIVE", "CONNECTED_PAPER" -> "PAPER ACTIVE (SIMULATED)"
-                                    "CONNECTED_DEMO" -> "DEMO ACTIVE (SIMULATED)"
-                                    "CONNECTING" -> "CONNECTING..."
-                                    "ERROR" -> "AUTH ERROR"
+                                text = when {
+                                    isBreakerTripped -> "CIRCUIT BREAKER TRIPPED"
+                                    connectionStatus == "CONNECTED_LIVE" || connectionStatus == "CONNECTED_PAPER" -> "PAPER ACTIVE (SIMULATED)"
+                                    connectionStatus == "CONNECTED_DEMO" -> "DEMO ACTIVE (SIMULATED)"
+                                    connectionStatus == "CONNECTING" -> "CONNECTING..."
+                                    connectionStatus == "ERROR" -> "AUTH ERROR"
                                     else -> "STANDBY"
                                 },
                                 style = MaterialTheme.typography.labelSmall.copy(
@@ -949,12 +953,14 @@ private fun AutoTradeConfigContent(
     marketUniverse: MarketCategory,
     onSelectMarketUniverse: (MarketCategory) -> Unit,
     onToggleAutoTrade: (Boolean) -> Unit,
-    onUpdateRisk: (Int, Double, Double, Boolean) -> Unit,
+    onUpdateRisk: (Int, Double, Double, Boolean, Double) -> Unit,
+    onResetCircuitBreaker: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var threshold by remember(activeAccount) { mutableIntStateOf(activeAccount?.minConfidenceThreshold ?: 80) }
     var lotSize by remember(activeAccount) { mutableStateOf((activeAccount?.defaultLotSize ?: 0.10).toString()) }
     var maxRisk by remember(activeAccount) { mutableStateOf((activeAccount?.maxRiskPercentage ?: 1.0).toString()) }
+    var dailyLimit by remember(activeAccount) { mutableStateOf((activeAccount?.dailyLossLimit ?: 500.0).toString()) }
     var autoSlTp by remember(activeAccount) { mutableStateOf(activeAccount?.autoStopLossTakeProfit ?: true) }
 
     val isArmed = activeAccount?.autoTradeEnabled == true
@@ -1253,6 +1259,65 @@ private fun AutoTradeConfigContent(
                         )
                     }
 
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = dailyLimit,
+                        onValueChange = { dailyLimit = it },
+                        label = { Text("Daily Loss Limit ($)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = greenColor,
+                            unfocusedBorderColor = Color(0xFF37474F),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    val isBreakerTripped = activeAccount != null && activeAccount.dailyLossLimit > 0.0 &&
+                        (activeAccount.isCircuitBreakerTripped || activeAccount.dailyRealizedLoss >= activeAccount.dailyLossLimit)
+
+                    if (isBreakerTripped) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Surface(
+                            color = Color(0xFFFF5252).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, Color(0xFFFF5252))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF5252),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "DAILY-LOSS CIRCUIT BREAKER ACTIVE",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = Color(0xFFFF5252)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Realized loss: $${String.format(Locale.US, "%.2f", activeAccount?.dailyRealizedLoss ?: 0.0)} >= Limit: $${String.format(Locale.US, "%.2f", activeAccount?.dailyLossLimit ?: 0.0)}. Trading halted for current session.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = onResetCircuitBreaker,
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF5252)),
+                                    border = BorderStroke(1.dp, Color(0xFFFF5252)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Reset Circuit Breaker", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
@@ -1281,7 +1346,8 @@ private fun AutoTradeConfigContent(
                         onClick = {
                             val parsedLots = lotSize.toDoubleOrNull() ?: 0.10
                             val parsedRisk = maxRisk.toDoubleOrNull() ?: 1.0
-                            onUpdateRisk(threshold, parsedLots, parsedRisk, autoSlTp)
+                            val parsedDailyLimit = dailyLimit.toDoubleOrNull() ?: 500.0
+                            onUpdateRisk(threshold, parsedLots, parsedRisk, autoSlTp, parsedDailyLimit)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = greenColor, contentColor = Color.Black),
                         shape = RoundedCornerShape(10.dp),
@@ -1519,7 +1585,11 @@ private fun BrokerAccountEditDialog(
                         balance = balance.toDoubleOrNull() ?: 10000.0,
                         equity = balance.toDoubleOrNull() ?: 10000.0,
                         freeMargin = balance.toDoubleOrNull() ?: 10000.0,
-                        isConnected = account?.isConnected ?: false
+                        isConnected = account?.isConnected ?: false,
+                        dailyLossLimit = account?.dailyLossLimit ?: 500.0,
+                        dailyRealizedLoss = account?.dailyRealizedLoss ?: 0.0,
+                        dailyLossResetTimestamp = account?.dailyLossResetTimestamp ?: 0L,
+                        isCircuitBreakerTripped = account?.isCircuitBreakerTripped ?: false
                     )
                     onSave(entity)
                 },
