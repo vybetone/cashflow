@@ -46,7 +46,8 @@ abstract class AppDatabase : RoomDatabase() {
                     "cashflow_database"
                 )
                 .addMigrations(MIGRATION_4_5)
-                .fallbackToDestructiveMigration(false)
+                .fallbackToDestructiveMigrationFrom(true, 1, 2, 3)
+                .fallbackToDestructiveMigrationOnDowngrade(true)
                 .build()
                 INSTANCE = instance
                 instance

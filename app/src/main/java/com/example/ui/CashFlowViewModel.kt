@@ -848,11 +848,11 @@ class CashFlowViewModel(application: Application) : AndroidViewModel(application
             val current = activeBrokerAccount.value
             if (current != null) {
                 val updated = current.copy(
-                    minConfidenceThreshold = threshold,
-                    defaultLotSize = lotSize,
-                    maxRiskPercentage = maxRisk,
+                    minConfidenceThreshold = threshold.coerceIn(50, 99),
+                    defaultLotSize = lotSize.coerceAtLeast(0.01),
+                    maxRiskPercentage = maxRisk.coerceIn(0.1, 10.0),
                     autoStopLossTakeProfit = autoSlTp,
-                    dailyLossLimit = dailyLossLimit ?: current.dailyLossLimit
+                    dailyLossLimit = (dailyLossLimit ?: current.dailyLossLimit).coerceAtLeast(10.0)
                 )
                 repository.updateBrokerAccount(updated)
                 _brokerFeedbackMessage.value = "Broker risk parameters updated."
