@@ -24,20 +24,89 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
 
-      - name: Prepare Secrets Configuration
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: chmod +x gradlew
+
+      - name: Prepare Build Secrets Configuration
         run: |
           touch .env
           echo "ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}" >> .env
           echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
 
-      - name: Compile and Assemble Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Configure and Validate Firebase google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          python3 -c "
+          import os, sys, json
+
+          secret_content = os.environ.get('GOOGLE_SERVICES_JSON', '').strip()
+          target_path = 'app/google-services.json'
+          expected_pkg = 'com.aistudio.cashflow.a3k9p'
+
+          if secret_content:
+              try:
+                  data = json.loads(secret_content)
+              except Exception as e:
+                  print('::error::The GOOGLE_SERVICES_JSON repository secret is not valid JSON. Ensure the full JSON file contents are pasted into GitHub secrets.', file=sys.stderr)
+                  sys.exit(1)
+
+              clients = data.get('client', [])
+              if not clients:
+                  print('::error::The GOOGLE_SERVICES_JSON configuration does not contain any client definitions.', file=sys.stderr)
+                  sys.exit(1)
+
+              pkg_names = [c.get('client_info', {}).get('android_client_info', {}).get('package_name') for c in clients]
+              if expected_pkg not in pkg_names:
+                  print(f'::error::Firebase package name mismatch in GOOGLE_SERVICES_JSON! Expected \"{expected_pkg}\", but found {pkg_names}. Confirm that your Firebase Android app was created with package name \"{expected_pkg}\".', file=sys.stderr)
+                  sys.exit(1)
+
+              with open(target_path, 'w', encoding='utf-8') as f:
+                  json.dump(data, f, indent=2)
+
+              if not os.path.exists(target_path) or os.path.getsize(target_path) == 0:
+                  print(f'::error::Failed to write {target_path} or file is empty.', file=sys.stderr)
+                  sys.exit(1)
+
+              print(f'Successfully created and validated {target_path} for application ID {expected_pkg}.')
+          elif os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+              try:
+                  with open(target_path, 'r', encoding='utf-8') as f:
+                      data = json.load(f)
+                  clients = data.get('client', [])
+                  pkg_names = [c.get('client_info', {}).get('android_client_info', {}).get('package_name') for c in clients]
+                  if expected_pkg not in pkg_names:
+                      print(f'::error::Existing {target_path} package name does not match \"{expected_pkg}\"! Found {pkg_names}.', file=sys.stderr)
+                      sys.exit(1)
+                  print(f'Preserving and verified existing {target_path} for application ID {expected_pkg}.')
+              except Exception as e:
+                  print(f'::error::Existing {target_path} is invalid JSON: {e}', file=sys.stderr)
+                  sys.exit(1)
+          else:
+              print('::error::Missing required Firebase configuration! The GitHub Actions repository secret \"GOOGLE_SERVICES_JSON\" is not set and app/google-services.json does not exist. Action required: Go to GitHub repository Settings > Secrets and variables > Actions > New repository secret, name it \"GOOGLE_SERVICES_JSON\", and paste the complete contents of google-services.json for package \"' + expected_pkg + '\".', file=sys.stderr)
+              sys.exit(1)
+          "
+
+      - name: Restore or Generate Debug Keystore
+        run: |
+          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "Successfully restored debug.keystore from debug.keystore.base64"
+          elif [ ! -f "debug.keystore" ]; then
+            echo "Generating fresh standard debug.keystore with keytool..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            echo "Successfully generated debug.keystore"
+          else
+            echo "debug.keystore is present and ready"
+          fi
+
+      - name: Build Android Debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload Downloadable Debug APK Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: CashFlow-AI-Debug-APK

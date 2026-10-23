@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Base64
 
 plugins {
   alias(libs.plugins.android.application)
@@ -21,6 +22,20 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+  // Ensure debug.keystore exists for debugConfig before signing configuration
+  val debugKeystoreFile = file("${rootDir}/debug.keystore")
+  if (!debugKeystoreFile.exists()) {
+    val b64File = file("${rootDir}/debug.keystore.base64")
+    if (b64File.exists()) {
+      try {
+        debugKeystoreFile.writeBytes(
+          Base64.getMimeDecoder().decode(b64File.readText().trim())
+        )
+      } catch (e: Exception) {
+        logger.warn("Could not decode debug.keystore.base64: ${e.message}")
+      }
+    }
   }
 
   signingConfigs {
@@ -69,6 +84,7 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("GOOGLE_SERVICES_JSON")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
