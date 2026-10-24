@@ -29,11 +29,19 @@ jobs:
         run: chmod +x gradlew
 
       - name: Prepare Build Secrets Configuration
+        env:
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          touch .env
-          echo "ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}" >> .env
-          echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
-          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          python3 -c "
+          import os
+          keys = ['ALPHA_VANTAGE_API_KEY', 'FINNHUB_API_KEY', 'GEMINI_API_KEY']
+          with open('.env', 'w') as f:
+              for k in keys:
+                  val = os.environ.get(k, '').strip() or f'MY_{k}'
+                  f.write(f'{k}=\"{val}\"\n')
+          "
 
       - name: Configure and Validate Firebase google-services.json
         env:
