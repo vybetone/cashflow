@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.screens.AiAnalyticsScreen
 import com.example.ui.screens.BrokerConnectionScreen
 import com.example.ui.screens.CameraScannerScreen
+import com.example.ui.screens.ContinuousImprovementScreen
 import com.example.ui.screens.ScreenAnalysisHudScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.TradeJournalScreen
@@ -210,6 +211,15 @@ fun CashFlowApp(
                         modifier = Modifier.testTag("nav_item_settings")
                     )
 
+                    NavigationRailItem(
+                        selected = selectedTab == 6,
+                        onClick = { viewModel.setSelectedTab(6) },
+                        icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = "Auto-Learn") },
+                        label = { Text("Auto-Learn", fontFamily = FontFamily.Monospace) },
+                        colors = railColors,
+                        modifier = Modifier.testTag("nav_item_auto_improve")
+                    )
+
                     Spacer(modifier = Modifier.weight(1f))
 
                     // Status at bottom of rail
@@ -252,6 +262,7 @@ fun CashFlowApp(
                                         3 -> "BROKER BRIDGE & AUTOTRADE"
                                         4 -> "AI TRADING ASSISTANT & ANALYTICS"
                                         5 -> "SYSTEM SETTINGS"
+                                        6 -> "CONTINUOUS LEARNING & AUTO-IMPROVE"
                                         else -> "CASH FLOW AI"
                                     },
                                     style = MaterialTheme.typography.titleMedium.copy(
@@ -303,6 +314,7 @@ fun CashFlowApp(
                                 3 -> BrokerConnectionScreen(viewModel = viewModel)
                                 4 -> AiAnalyticsScreen(viewModel = viewModel)
                                 5 -> SettingsScreen(viewModel = viewModel)
+                                6 -> ContinuousImprovementScreen(viewModel = viewModel)
                             }
                         }
                     }
@@ -436,6 +448,15 @@ fun CashFlowApp(
                             colors = itemColors,
                             modifier = Modifier.testTag("nav_item_settings")
                         )
+
+                        NavigationBarItem(
+                            selected = selectedTab == 6,
+                            onClick = { viewModel.setSelectedTab(6) },
+                            icon = { Icon(Icons.Filled.AutoAwesome, contentDescription = "Auto-Learn") },
+                            label = { Text("Learn", fontFamily = FontFamily.Monospace) },
+                            colors = itemColors,
+                            modifier = Modifier.testTag("nav_item_auto_improve")
+                        )
                     }
                 }
             ) { paddingValues ->
@@ -452,6 +473,7 @@ fun CashFlowApp(
                         3 -> BrokerConnectionScreen(viewModel = viewModel)
                         4 -> AiAnalyticsScreen(viewModel = viewModel)
                         5 -> SettingsScreen(viewModel = viewModel)
+                        6 -> ContinuousImprovementScreen(viewModel = viewModel)
                     }
                 }
             }

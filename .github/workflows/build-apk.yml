@@ -110,6 +110,13 @@ jobs:
             echo "debug.keystore is present and ready"
           fi
 
+      - name: Run Automated Safety & Regression Unit Tests
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
       - name: Build Android Debug APK
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -117,10 +124,21 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Upload Downloadable Debug APK Artifact
+      - name: Generate Cryptographic SHA-256 Checksum
+        run: |
+          cd app/build/outputs/apk/debug
+          sha256sum app-debug.apk > app-debug.apk.sha256
+          echo "=========================================================="
+          echo "BUILT APK SHA-256 CHECKSUM:"
+          cat app-debug.apk.sha256
+          echo "=========================================================="
+
+      - name: Upload Downloadable Debug APK Artifact & Checksum
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: CashFlow-AI-Debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.apk.sha256
           if-no-files-found: error

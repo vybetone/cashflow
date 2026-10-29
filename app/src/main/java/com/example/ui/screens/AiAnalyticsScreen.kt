@@ -164,10 +164,22 @@ fun AiAnalyticsScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Analytics, contentDescription = null, tint = if (screenSubTab == 1) greenColor else Color.Gray, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("QUANT ACCURACY & MATRIX", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                            Text("QUANT MATRIX", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }
                     },
                     modifier = Modifier.testTag("tab_quant_matrix")
+                )
+                Tab(
+                    selected = screenSubTab == 2,
+                    onClick = { screenSubTab = 2 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = if (screenSubTab == 2) greenColor else Color.Gray, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SELF-IMPROVE", fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+                    },
+                    modifier = Modifier.testTag("tab_continuous_learning")
                 )
             }
 
@@ -325,7 +337,7 @@ fun AiAnalyticsScreen(
                         )
                     }
                 }
-            } else {
+            } else if (screenSubTab == 1) {
                 // === QUANT ACCURACY & RISK MATRIX (Tab 1) ===
                 QuantAccuracyMatrixContent(
                     calculatedWinRate = calculatedWinRate,
@@ -334,6 +346,9 @@ fun AiAnalyticsScreen(
                     darkCardBg = darkCardBg,
                     isWideScreen = isWideScreen
                 )
+            } else {
+                // === CONTINUOUS IMPROVEMENT & EVALUATION (Tab 2) ===
+                ContinuousImprovementScreen(viewModel = viewModel)
             }
         }
     }
