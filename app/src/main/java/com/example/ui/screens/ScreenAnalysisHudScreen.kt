@@ -316,11 +316,11 @@ fun ScreenAnalysisHudScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("signals_list"),
-                        contentPadding = PaddingValues(bottom = 30.dp),
+                        contentPadding = PaddingValues(bottom = 48.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         highConfidenceSignal?.let { sig ->
-                            item {
+                            item(key = "high_confidence_ai_signal") {
                                 AiSignal90Card(
                                     signal = sig,
                                     onRefreshSignal = { viewModel.recalculateHighConfidenceSignal() },
@@ -329,7 +329,10 @@ fun ScreenAnalysisHudScreen(
                             }
                         }
 
-                        items(allSignals) { signal ->
+                        items(
+                            items = allSignals,
+                            key = { it.id }
+                        ) { signal ->
                             LiveSignalCard(
                                 signal = signal,
                                 onConvertToJournal = { viewModel.convertSignalToJournalEntry(it) },
@@ -342,162 +345,166 @@ fun ScreenAnalysisHudScreen(
             }
         } else {
             // VERTICAL MOBILE LIST VIEW (Default Compact Screen)
-            Column(
+            // Unified single vertical scrolling container (LazyColumn) to prevent clipping and eliminate competing scroll gestures
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .testTag("signals_list"),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 48.dp)
             ) {
                 // Control Bar
-                ScreenControlBar(
-                    isScreenCaptureActive = isScreenCaptureActive,
-                    greenColor = greenColor,
-                    redColor = redColor,
-                    onToggleScreenCapture = {
-                        if (isScreenCaptureActive) {
-                            viewModel.stopScreenCaptureService(context)
-                        } else {
-                            if (mediaProjectionManager != null) {
-                                try {
-                                    val intent = mediaProjectionManager.createScreenCaptureIntent()
-                                    mediaProjectionLauncher.launch(intent)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
+                item(key = "control_bar") {
+                    ScreenControlBar(
+                        isScreenCaptureActive = isScreenCaptureActive,
+                        greenColor = greenColor,
+                        redColor = redColor,
+                        onToggleScreenCapture = {
+                            if (isScreenCaptureActive) {
+                                viewModel.stopScreenCaptureService(context)
+                            } else {
+                                if (mediaProjectionManager != null) {
+                                    try {
+                                        val intent = mediaProjectionManager.createScreenCaptureIntent()
+                                        mediaProjectionLauncher.launch(intent)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                        viewModel.startInAppSimulationCapture()
+                                    }
+                                } else {
                                     viewModel.startInAppSimulationCapture()
                                 }
-                            } else {
-                                viewModel.startInAppSimulationCapture()
                             }
                         }
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Confirmed Markets Universe Selector (1 FOREX, 2 GOLD, 3 CRYPTO, 4 STOCKS, 5 ALL OF THEM)
-                MarketUniverseSelectorBar(
-                    selectedCategory = selectedCategory,
-                    selectedAsset = selectedAsset,
-                    isScanning = isAnalyzing,
-                    onCategorySelected = { viewModel.setMarketCategory(it) },
-                    onAssetSelected = { viewModel.setSelectedMarketAsset(it) },
-                    onScanAllMarkets = { viewModel.scanAllConfirmedMarkets() }
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Live Chart Canvas Window
-                LiveChartWindow(
-                    latestSignal = latestSignal,
-                    selectedAsset = selectedAsset,
-                    isAnalyzing = isAnalyzing,
-                    greenColor = greenColor,
-                    redColor = redColor,
-                    onScanChart = {
-                        val dummyBitmap = createSimulatedChartBitmap()
-                        viewModel.processChartFrameBitmap(dummyBitmap, "SCREEN_ANALYSIS", selectedAsset)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(230.dp)
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Real-Time AI Trading Signals",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White
                     )
-                    Surface(
-                        color = Color(0xFF1E293B),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = "${allSignals.size} Signals",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                            color = Color(0xFF82B1FF)
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                // Confirmed Markets Universe Selector (1 FOREX, 2 GOLD, 3 CRYPTO, 4 STOCKS, 5 ALL OF THEM)
+                item(key = "market_universe_selector") {
+                    MarketUniverseSelectorBar(
+                        selectedCategory = selectedCategory,
+                        selectedAsset = selectedAsset,
+                        isScanning = isAnalyzing,
+                        onCategorySelected = { viewModel.setMarketCategory(it) },
+                        onAssetSelected = { viewModel.setSelectedMarketAsset(it) },
+                        onScanAllMarkets = { viewModel.scanAllConfirmedMarkets() }
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
 
-                // Mobile Broker Execution Status Banner
-                Surface(
-                    color = Color(0xFF131822),
-                    shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF263238)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { viewModel.setSelectedTab(3) }
-                ) {
+                // Live Chart Canvas Window
+                item(key = "live_chart_window") {
+                    LiveChartWindow(
+                        latestSignal = latestSignal,
+                        selectedAsset = selectedAsset,
+                        isAnalyzing = isAnalyzing,
+                        greenColor = greenColor,
+                        redColor = redColor,
+                        onScanChart = {
+                            val dummyBitmap = createSimulatedChartBitmap()
+                            viewModel.processChartFrameBitmap(dummyBitmap, "SCREEN_ANALYSIS", selectedAsset)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(230.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Section Header: Real-Time AI Trading Signals
+                item(key = "signals_section_header") {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.AccountBalance,
-                                contentDescription = null,
-                                tint = if (brokerConnectionStatus.startsWith("CONNECTED")) Color(0xFF00E676) else Color(0xFF90A4AE),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Real-Time AI Trading Signals",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White
+                        )
+                        Surface(
+                            color = Color(0xFF1E293B),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
                             Text(
-                                text = activeBroker?.accountName ?: "CashFlow Paper Engine",
+                                text = "${allSignals.size} Signals",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                color = Color(0xFF82B1FF)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // Mobile Broker Execution Status Banner (CashFlow Paper Engine — 1-TAP EXECUTE)
+                item(key = "broker_execution_banner") {
+                    Surface(
+                        color = Color(0xFF131822),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF263238)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setSelectedTab(3) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = null,
+                                    tint = if (brokerConnectionStatus.startsWith("CONNECTED")) Color(0xFF00E676) else Color(0xFF90A4AE),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = activeBroker?.accountName ?: "CashFlow Paper Engine",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    ),
+                                    color = Color.White
+                                )
+                            }
+
+                            Text(
+                                text = if (activeBroker?.autoTradeEnabled == true) "⚡ AUTOTRADE ON" else "⚡ 1-TAP EXECUTE",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
                                 ),
-                                color = Color.White
+                                color = if (activeBroker?.autoTradeEnabled == true) Color(0xFF00E676) else Color(0xFF00E5FF)
                             )
                         }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
-                        Text(
-                            text = if (activeBroker?.autoTradeEnabled == true) "⚡ AUTOTRADE ON" else "⚡ 1-TAP EXECUTE",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            ),
-                            color = if (activeBroker?.autoTradeEnabled == true) Color(0xFF00E676) else Color(0xFF00E5FF)
+                highConfidenceSignal?.let { sig ->
+                    item(key = "high_confidence_ai_signal") {
+                        AiSignal90Card(
+                            signal = sig,
+                            onRefreshSignal = { viewModel.recalculateHighConfidenceSignal() },
+                            onLogToJournal = { viewModel.convertAiSignalToJournalEntry(it) }
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .testTag("signals_list")
-                ) {
-                    highConfidenceSignal?.let { sig ->
-                        item {
-                            AiSignal90Card(
-                                signal = sig,
-                                onRefreshSignal = { viewModel.recalculateHighConfidenceSignal() },
-                                onLogToJournal = { viewModel.convertAiSignalToJournalEntry(it) }
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                    }
-
-                    items(allSignals) { signal ->
-                        LiveSignalCard(
-                            signal = signal,
-                            onConvertToJournal = { viewModel.convertSignalToJournalEntry(it) },
-                            onDelete = { viewModel.deleteSignal(it) },
-                            onExecuteOnBroker = { viewModel.executeSignalOnBroker(it) }
-                        )
-                    }
+                items(
+                    items = allSignals,
+                    key = { it.id }
+                ) { signal ->
+                    LiveSignalCard(
+                        signal = signal,
+                        onConvertToJournal = { viewModel.convertSignalToJournalEntry(it) },
+                        onDelete = { viewModel.deleteSignal(it) },
+                        onExecuteOnBroker = { viewModel.executeSignalOnBroker(it) }
+                    )
                 }
             }
         }
