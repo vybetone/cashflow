@@ -15,13 +15,13 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
-class GeminiTradingEngine {
-
-    private val client = OkHttpClient.Builder()
+class GeminiTradingEngine(
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+) {
 
     suspend fun analyzeChartImage(
         bitmap: Bitmap,
@@ -58,7 +58,7 @@ class GeminiTradingEngine {
         modelName: String
     ): TradingSignalEntity? {
         val base64Image = bitmapToBase64(bitmap)
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
+        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent"
 
         val prompt = """
             You are CASH FLOW AI, an elite quantitative trading signal generator and senior chart technician.
@@ -112,6 +112,7 @@ class GeminiTradingEngine {
 
         val request = Request.Builder()
             .url(endpoint)
+            .header("x-goog-api-key", apiKey)
             .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -262,7 +263,7 @@ class GeminiTradingEngine {
         brokerContext: String?
     ): TradingSignalEntity? {
         val asset = quote.asset
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
+        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent"
 
         val prompt = """
             You are CASH FLOW AI, an elite institutional trading assistant and quantitative signal strategist.
@@ -320,6 +321,7 @@ class GeminiTradingEngine {
 
         val request = Request.Builder()
             .url(endpoint)
+            .header("x-goog-api-key", apiKey)
             .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -373,80 +375,159 @@ class GeminiTradingEngine {
         quote: GenuineMarketQuote,
         conversationHistory: List<AssistantChatMessage>,
         userMessage: String,
-        preferredModel: String = "gemini-3.5-flash"
+        preferredModel: String = "gemini-3.5-flash",
+        apiKeyOverride: String? = null
     ): String = withContext(Dispatchers.IO) {
-        val apiKey = try {
+        val apiKey = apiKeyOverride ?: try {
             BuildConfig.GEMINI_API_KEY
-        } catch (e: Throwable) {
+        } catch (_: Throwable) {
             ""
         }
 
-        if (apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY") {
-            try {
-                val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$preferredModel:generateContent?key=$apiKey"
-                val asset = quote.asset
+        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+            return@withContext "AI Assistant unavailable: Please set a valid GEMINI_API_KEY in the Secrets panel to chat with Gemini on live telemetry."
+        }
 
-                val systemPrompt = """
-                    You are CASH FLOW AI, a real-time quantitative trading assistant.
-                    You are currently analyzing live market telemetry for ${asset.symbol} (${asset.name}, ${asset.category.title}).
-                    Live Telemetry:
-                    - Price: ${quote.lastPrice} (${if (quote.isBidAskEstimated) "Est. Indicative Bid: ${quote.bid}, Est. Indicative Ask: ${quote.ask} [Non-Executable]" else "Bid: ${quote.bid}, Ask: ${quote.ask}"})
-                    - 24h Change: ${quote.change24hPercent}% | 24h Range: [${quote.low24h} - ${quote.high24h}]
-                    - RSI(14): ${quote.rsi14} | MACD Hist: ${quote.macdHistogram}
-                    - EMAs: 20 EMA (${quote.ema20}), 50 EMA (${quote.ema50}), 200 EMA (${quote.ema200?.toString() ?: "UNAVAILABLE (< 200 candles)"})
-                    - Candle Geometry: ${quote.candlePattern} | Order Flow: ${quote.orderFlowBias}
-                    - Support: ${quote.supportLevel} | Resistance: ${quote.resistanceLevel}
+        val asset = quote.asset
+        val systemPrompt = """
+            You are CASH FLOW AI, a real-time quantitative trading assistant.
+            You are currently analyzing live market telemetry for ${asset.symbol} (${asset.name}, ${asset.category.title}).
+            Live Telemetry:
+            - Price: ${quote.lastPrice} (${if (quote.isBidAskEstimated) "Est. Indicative Bid: ${quote.bid}, Est. Indicative Ask: ${quote.ask} [Non-Executable Indicative Spread]" else "Bid: ${quote.bid}, Ask: ${quote.ask}"})
+            - 24h Change: ${quote.change24hPercent}% | 24h Range: [${quote.low24h} - ${quote.high24h}]
+            - RSI(14): ${quote.rsi14} | MACD Hist: ${quote.macdHistogram}
+            - EMAs: 20 EMA (${quote.ema20}), 50 EMA (${quote.ema50}), 200 EMA (${quote.ema200?.toString() ?: "UNAVAILABLE (< 200 candles)"})
+            - Candle Geometry: ${quote.candlePattern} | Order Flow: ${quote.orderFlowBias}
+            - Support: ${quote.supportLevel} | Resistance: ${quote.resistanceLevel}
 
-                    Provide concise, highly actionable, evidence-based trading guidance. Include exact numbers, risk management advice, stop loss/take profit recommendations, and broker execution readiness.
-                """.trimIndent()
+            Provide concise, highly actionable, evidence-based trading guidance. Include exact numbers, risk management advice, stop loss/take profit recommendations, and broker execution readiness.
+        """.trimIndent()
 
-                val contentsArray = JSONArray()
-                for (msg in conversationHistory.takeLast(6)) {
-                    val role = if (msg.isUser) "user" else "model"
-                    contentsArray.put(JSONObject().apply {
-                        put("role", role)
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().apply { put("text", msg.text) })
-                        })
-                    })
-                }
+        val contentsArray = JSONArray()
+        // Deduplicate: drop any trailing user message matching the current message
+        val priorHistory = conversationHistory
+            .dropLastWhile { it.isUser && it.text.trim() == userMessage.trim() }
+            .takeLast(6)
 
-                contentsArray.put(JSONObject().apply {
-                    put("role", "user")
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().apply { put("text", "$systemPrompt\n\nUser Question: $userMessage") })
-                    })
+        for (msg in priorHistory) {
+            val role = if (msg.isUser) "user" else "model"
+            contentsArray.put(JSONObject().apply {
+                put("role", role)
+                put("parts", JSONArray().apply {
+                    put(JSONObject().apply { put("text", msg.text) })
                 })
+            })
+        }
 
-                val jsonPayload = JSONObject().apply {
-                    put("contents", contentsArray)
-                    put("generationConfig", JSONObject().apply {
-                        put("temperature", 0.4)
-                    })
-                }
+        // Add current user message exactly once
+        contentsArray.put(JSONObject().apply {
+            put("role", "user")
+            put("parts", JSONArray().apply {
+                put(JSONObject().apply { put("text", userMessage.trim()) })
+            })
+        })
 
-                val request = Request.Builder()
-                    .url(endpoint)
-                    .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
+        val jsonPayload = JSONObject().apply {
+            put("systemInstruction", JSONObject().apply {
+                put("parts", JSONArray().apply {
+                    put(JSONObject().apply { put("text", systemPrompt) })
+                })
+            })
+            put("contents", contentsArray)
+            put("generationConfig", JSONObject().apply {
+                put("temperature", 0.4)
+            })
+        }
 
+        fun executeModelCall(model: String): ChatCallResult {
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+            val request = Request.Builder()
+                .url(endpoint)
+                .header("x-goog-api-key", apiKey)
+                .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            return try {
                 val response = client.newCall(request).execute()
                 val responseBody = response.body?.string()
-                if (response.isSuccessful && responseBody != null) {
+                if (response.isSuccessful && !responseBody.isNullOrBlank()) {
                     val respObj = JSONObject(responseBody)
                     val cand = respObj.optJSONArray("candidates")
-                    if (cand != null && cand.length() > 0) {
-                        val text = cand.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")?.getJSONObject(0)?.optString("text")
-                        if (!text.isNullOrBlank()) {
-                            return@withContext text.trim()
-                        }
+                    val text = cand?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text")
+
+                    if (!text.isNullOrBlank()) {
+                        ChatCallResult.Success(text.trim())
+                    } else {
+                        ChatCallResult.HttpError(response.code, "Received empty or malformed candidate in response")
                     }
+                } else {
+                    val parsedError = parseGeminiErrorMessage(responseBody)
+                    ChatCallResult.HttpError(response.code, parsedError ?: responseBody.orEmpty())
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                ChatCallResult.NetworkFailure(e)
             }
         }
 
-        return@withContext "AI Assistant unavailable: Please set a valid GEMINI_API_KEY in the Secrets panel to chat with Gemini on live telemetry."
+        var result = executeModelCall(preferredModel)
+
+        // If user selected gemini-3.1-pro-preview and hit quota (429) or not found (404),
+        // fallback to verified gemini-3.5-flash
+        if (result is ChatCallResult.HttpError && (result.code == 429 || result.code == 404) && preferredModel != "gemini-3.5-flash") {
+            val fallback = executeModelCall("gemini-3.5-flash")
+            if (fallback is ChatCallResult.Success) {
+                return@withContext fallback.text
+            }
+        }
+
+        return@withContext when (result) {
+            is ChatCallResult.Success -> result.text
+            is ChatCallResult.NetworkFailure -> {
+                val msg = result.exception.localizedMessage ?: "Connection timed out"
+                "Network failure connecting to Gemini: $msg. Please verify your internet connection."
+            }
+            is ChatCallResult.HttpError -> {
+                val safeMsg = result.rawError
+                    .replace(Regex("key=[a-zA-Z0-9._-]+"), "key=[REDACTED]")
+                    .replace(apiKey, "[REDACTED]")
+                    .take(160)
+
+                when (result.code) {
+                    400 -> "Gemini API Bad Request (HTTP 400)${if (safeMsg.isNotBlank()) ": $safeMsg" else ". Invalid request payload format."}"
+                    401, 403 -> "Gemini API authentication failed (HTTP ${result.code}): Unauthorized or invalid GEMINI_API_KEY. Please verify your key in the Secrets panel."
+                    404 -> "Gemini model '$preferredModel' not found (HTTP 404). Please switch to gemini-3.5-flash in Settings."
+                    429 -> "Gemini API rate limit or quota exceeded (HTTP 429). Please wait a moment or switch to gemini-3.5-flash in Settings."
+                    in 500..599 -> "Gemini service temporarily unavailable (HTTP ${result.code}). Google's AI servers are experiencing downtime. Please retry shortly."
+                    else -> {
+                        if (safeMsg.contains("empty or malformed", ignoreCase = true)) {
+                            "Received empty or malformed response from Gemini. Please retry your question."
+                        } else {
+                            "Gemini API returned error code ${result.code}${if (safeMsg.isNotBlank()) ": $safeMsg" else ". Please retry shortly."}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseGeminiErrorMessage(responseBody: String?): String? {
+        if (responseBody.isNullOrBlank()) return null
+        return try {
+            val root = JSONObject(responseBody)
+            val err = root.optJSONObject("error")
+            err?.optString("message")?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private sealed class ChatCallResult {
+        data class Success(val text: String) : ChatCallResult()
+        data class HttpError(val code: Int, val rawError: String) : ChatCallResult()
+        data class NetworkFailure(val exception: Exception) : ChatCallResult()
     }
 }

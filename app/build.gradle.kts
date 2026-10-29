@@ -22,6 +22,11 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val envGeminiApiKey = System.getenv("GEMINI_API_KEY")?.trim().orEmpty()
+    if (envGeminiApiKey.isNotBlank() && envGeminiApiKey != "MY_GEMINI_API_KEY") {
+      buildConfigField("String", "GEMINI_API_KEY", "\"$envGeminiApiKey\"")
+    }
   }
   // Ensure debug.keystore exists for debugConfig before signing configuration
   val debugKeystoreFile = file("${rootDir}/debug.keystore")
@@ -85,9 +90,13 @@ secrets {
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
   ignoreList.add("GOOGLE_SERVICES_JSON")
+  val envGeminiKey = System.getenv("GEMINI_API_KEY")?.trim().orEmpty()
+  if (envGeminiKey.isNotBlank() && envGeminiKey != "MY_GEMINI_API_KEY") {
+    ignoreList.add("GEMINI_API_KEY")
+  }
 }
 
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.ERROR }
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
