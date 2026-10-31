@@ -427,16 +427,15 @@ open class ForexHistoricalDataProvider(
             if (candles[i].timestamp <= candles[i - 1].timestamp) return false
         }
 
-        // Check freshness
+        // Check freshness with realistic allowance for weekend/holiday forex market closures
         val lastCandleAgeSeconds = (System.currentTimeMillis() - candles.last().timestamp) / 1000L
         val maxStalenessSeconds = when (timeframe) {
-            "1h" -> 3600L  // Hourly: last candle should be < 1 hour old
-            "1d" -> 86400L  // Daily: last candle should be < 1 day old
+            "1h" -> 86400L * 4  // Hourly: allow up to 4 days for weekend closure (Fri 5pm to Sun 5pm) + holiday buffer
+            "1d" -> 86400L * 6  // Daily: allow up to 6 days
             else -> 172800L
         }
 
-        // Allow some buffer for market holidays/weekends (forex closed)
-        if (lastCandleAgeSeconds > maxStalenessSeconds * 3) return false
+        if (lastCandleAgeSeconds > maxStalenessSeconds) return false
 
         return true
     }

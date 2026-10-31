@@ -761,6 +761,78 @@ class RealMarketDataEngineTest {
         )
     }
 
+    @Test
+    fun testEngine_forexYahooFallbackProducesGenuineQuotesAndIndicators() = runTest {
+        val currentTimeSec = System.currentTimeMillis() / 1000
+        val mockHttpClient = createMockHttpClient { req ->
+            val url = req.url.toString()
+            if (url.contains("EURUSD=X")) {
+                val closesList = (1..60).map { 1.0800 + (it * 0.0001) }
+                val timestampsList = (1..60).map { currentTimeSec - (60 - it) * 3600 }
+                val closesJson = closesList.joinToString(",")
+                val timestampsJson = timestampsList.joinToString(",")
+                createJsonResponse(
+                    req,
+                    """
+                    {
+                        "chart": {
+                            "result": [
+                                {
+                                    "meta": {
+                                        "regularMarketPrice": 1.0860,
+                                        "chartPreviousClose": 1.0820,
+                                        "regularMarketDayHigh": 1.0870,
+                                        "regularMarketDayLow": 1.0790,
+                                        "regularMarketTime": $currentTimeSec
+                                    },
+                                    "timestamp": [$timestampsJson],
+                                    "indicators": {
+                                        "quote": [
+                                            {
+                                                "open": [$closesJson],
+                                                "high": [$closesJson],
+                                                "low": [$closesJson],
+                                                "close": [$closesJson]
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                    """.trimIndent()
+                )
+            } else {
+                createJsonResponse(req, "{}")
+            }
+        }
+
+        val defaultForexProvider = ForexHistoricalDataProvider(
+            client = mockHttpClient,
+            finnhubApiKey = null,
+            alphaVantageApiKey = null
+        )
+        val apiClient = RealMarketDataApiClient(
+            client = mockHttpClient,
+            forexProvider = defaultForexProvider
+        )
+
+        val asset = MarketUniverse.findAssetBySymbol("EUR/USD")
+        val result = apiClient.fetchRealQuote(asset)
+        assertTrue("Expected MarketFetchResult.Success, was $result", result is MarketFetchResult.Success)
+        val quote = (result as MarketFetchResult.Success).quote
+
+        assertEquals(1.0860, quote.lastPrice, 0.0001)
+        assertTrue(quote.bid > 0.0)
+        assertTrue(quote.ask > 0.0)
+        assertTrue("Bid must be less than Ask", quote.bid < quote.ask)
+        assertFalse("Quote must not be marked stale", quote.isStale)
+        assertTrue("RSI must be calculated from real prices", quote.rsi14 > 0.0)
+        assertTrue("EMA20 must be calculated", quote.ema20 > 0.0)
+        assertTrue("EMA50 must be calculated", quote.ema50 > 0.0)
+        assertFalse("Candle pattern must not be placeholder", quote.candlePattern.contains("Awaiting"))
+    }
+
     private fun createJsonResponse(request: Request, bodyString: String): Response {
         val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
         val responseBody = bodyString.toResponseBody(mediaType)

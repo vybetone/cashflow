@@ -188,108 +188,255 @@ class RealMarketDataApiClient(
     }
 
     private fun fetchGold(asset: MarketAsset): RawMarketData {
-        val tickerUrl = "https://api.binance.com/api/v3/ticker/24hr?symbol=PAXGUSDT"
-        val tickerReq = Request.Builder()
-            .url(tickerUrl)
-            .header("User-Agent", "CashFlowAI/1.0 (Android)")
+        try {
+            val tickerUrl = "https://api.binance.com/api/v3/ticker/24hr?symbol=PAXGUSDT"
+            val tickerReq = Request.Builder()
+                .url(tickerUrl)
+                .header("User-Agent", "CashFlowAI/1.0 (Android)")
+                .build()
+            val tickerJson = client.newCall(tickerReq).execute().use { resp ->
+                if (!resp.isSuccessful) throw IOException("Binance PAXG HTTP ${resp.code}")
+                JSONObject(resp.body?.string() ?: throw IOException("Empty body"))
+            }
+
+            val lastPrice = tickerJson.getDouble("lastPrice")
+            val bidPrice = tickerJson.optDouble("bidPrice", lastPrice)
+            val askPrice = tickerJson.optDouble("askPrice", lastPrice)
+            val change24h = tickerJson.optDouble("priceChangePercent", 0.0)
+            val high24h = tickerJson.optDouble("highPrice", lastPrice)
+            val low24h = tickerJson.optDouble("lowPrice", lastPrice)
+            val quoteVol = tickerJson.optDouble("quoteVolume", 0.0)
+            val closeTimeMs = tickerJson.optLong("closeTime", System.currentTimeMillis())
+
+            val klinesUrl = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=100"
+            val candles = mutableListOf<PriceCandlestick>()
+            try {
+                client.newCall(Request.Builder().url(klinesUrl).build()).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val arr = JSONArray(resp.body?.string() ?: "[]")
+                        for (i in 0 until arr.length()) {
+                            val kline = arr.getJSONArray(i)
+                            val tsMs = kline.getLong(0)
+                            val open = kline.getString(1).toDoubleOrNull() ?: continue
+                            val high = kline.getString(2).toDoubleOrNull() ?: continue
+                            val low = kline.getString(3).toDoubleOrNull() ?: continue
+                            val close = kline.getString(4).toDoubleOrNull() ?: continue
+                            val volume = kline.getString(7).toDoubleOrNull()
+                            candles.add(PriceCandlestick(tsMs, open, high, low, close, volume))
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val volString = String.format(java.util.Locale.US, "$%.2fM Gold Spot Vol", quoteVol / 1_000_000)
+
+            return RawMarketData(
+                symbol = asset.symbol,
+                lastPrice = lastPrice,
+                bid = bidPrice,
+                ask = askPrice,
+                bidAskIsEstimated = false,
+                change24hPercent = change24h,
+                change24hIsAvailable = true,
+                high24h = high24h,
+                low24h = low24h,
+                volume24h = volString,
+                historyCandles = candles,
+                timestampSeconds = closeTimeMs / 1000,
+                sourceProvider = "Binance Spot Gold (PAXG/USD)"
+            )
+        } catch (e: Exception) {
+            // Robust fallback to Yahoo Finance Gold Futures (GC=F) if Binance is unreachable
+            return fetchGoldFromYahoo(asset)
+        }
+    }
+
+    private fun fetchGoldFromYahoo(asset: MarketAsset): RawMarketData {
+        val url = "https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval=1h&range=1mo"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Android; CashFlowAI)")
             .build()
-        val tickerJson = client.newCall(tickerReq).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("Binance PAXG HTTP ${resp.code}")
+        val json = client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("Yahoo Finance Gold HTTP ${resp.code}")
             JSONObject(resp.body?.string() ?: throw IOException("Empty body"))
         }
 
-        val lastPrice = tickerJson.getDouble("lastPrice")
-        val bidPrice = tickerJson.optDouble("bidPrice", lastPrice)
-        val askPrice = tickerJson.optDouble("askPrice", lastPrice)
-        val change24h = tickerJson.optDouble("priceChangePercent", 0.0)
-        val high24h = tickerJson.optDouble("highPrice", lastPrice)
-        val low24h = tickerJson.optDouble("lowPrice", lastPrice)
-        val quoteVol = tickerJson.optDouble("quoteVolume", 0.0)
-        val closeTimeMs = tickerJson.optLong("closeTime", System.currentTimeMillis())
+        val res = json.getJSONObject("chart").getJSONArray("result").getJSONObject(0)
+        val meta = res.getJSONObject("meta")
+        val price = meta.getDouble("regularMarketPrice")
+        val prevClose = meta.optDouble("chartPreviousClose", meta.optDouble("previousClose", price))
+        val high = meta.optDouble("regularMarketDayHigh", price)
+        val low = meta.optDouble("regularMarketDayLow", price)
+        val timeSec = meta.getLong("regularMarketTime")
 
-        val klinesUrl = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=100"
+        val changePercent = if (prevClose > 0) ((price - prevClose) / prevClose) * 100.0 else 0.0
         val candles = mutableListOf<PriceCandlestick>()
         try {
-            client.newCall(Request.Builder().url(klinesUrl).build()).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val arr = JSONArray(resp.body?.string() ?: "[]")
-                    for (i in 0 until arr.length()) {
-                        val kline = arr.getJSONArray(i)
-                        val tsMs = kline.getLong(0)
-                        val open = kline.getString(1).toDoubleOrNull() ?: continue
-                        val high = kline.getString(2).toDoubleOrNull() ?: continue
-                        val low = kline.getString(3).toDoubleOrNull() ?: continue
-                        val close = kline.getString(4).toDoubleOrNull() ?: continue
-                        val volume = kline.getString(7).toDoubleOrNull()
-                        candles.add(PriceCandlestick(tsMs, open, high, low, close, volume))
-                    }
+            val quotesObj = res.getJSONObject("indicators").getJSONArray("quote").getJSONObject(0)
+            val timestampsArr = res.getJSONArray("timestamp")
+            val closeArr = quotesObj.optJSONArray("close")
+            val openArr = quotesObj.optJSONArray("open")
+            val highArr = quotesObj.optJSONArray("high")
+            val lowArr = quotesObj.optJSONArray("low")
+
+            if (closeArr != null && timestampsArr != null) {
+                for (i in 0 until closeArr.length()) {
+                    if (closeArr.isNull(i)) continue
+                    val close = closeArr.getDouble(i)
+                    val open = if (openArr != null && i < openArr.length() && !openArr.isNull(i)) openArr.getDouble(i) else close
+                    val hi = if (highArr != null && i < highArr.length() && !highArr.isNull(i)) highArr.getDouble(i) else close
+                    val lo = if (lowArr != null && i < lowArr.length() && !lowArr.isNull(i)) lowArr.getDouble(i) else close
+                    val actualHi = maxOf(hi, maxOf(open, close))
+                    val actualLo = minOf(lo, minOf(open, close))
+                    val ts = timestampsArr.getLong(i) * 1000L
+                    candles.add(PriceCandlestick(ts, open, actualHi, actualLo, close, null))
                 }
             }
         } catch (_: Exception) {}
 
-        val volString = String.format(java.util.Locale.US, "$%.2fM Gold Spot Vol", quoteVol / 1_000_000)
-
+        val halfSpread = 0.25
         return RawMarketData(
             symbol = asset.symbol,
-            lastPrice = lastPrice,
-            bid = bidPrice,
-            ask = askPrice,
-            bidAskIsEstimated = false,
-            change24hPercent = change24h,
+            lastPrice = price,
+            bid = price - halfSpread,
+            ask = price + halfSpread,
+            bidAskIsEstimated = true,
+            change24hPercent = changePercent,
             change24hIsAvailable = true,
-            high24h = high24h,
-            low24h = low24h,
-            volume24h = volString,
-            historyCandles = candles,
-            timestampSeconds = closeTimeMs / 1000,
-            sourceProvider = "Binance Spot Gold (PAXG/USD)"
+            high24h = high,
+            low24h = low,
+            volume24h = "COMEX Gold Futures",
+            historyCandles = candles.takeLast(100),
+            timestampSeconds = timeSec,
+            sourceProvider = "Yahoo Finance Gold Futures (GC=F)"
         )
     }
 
     private suspend fun fetchForex(asset: MarketAsset): RawMarketData {
         val provider = effectiveForexProvider
-        
-        // Fetch genuine historical OHLC candles
-        val historyResult = provider.fetchForexHistory(asset.symbol, timeframe = "1h", limit = 120)
-        if (historyResult !is PriceHistoryResult.Success) {
-            throw IOException("Forex OHLC unavailable: ${(historyResult as PriceHistoryResult.Failure).reason}")
+
+        // 1. Try configured provider (Finnhub / Alpha Vantage, or injected mock provider in tests)
+        val historyResult = try {
+            provider.fetchForexHistory(asset.symbol, timeframe = "1h", limit = 120)
+        } catch (e: Exception) {
+            PriceHistoryResult.Failure("Provider exception", e.message ?: "", true)
         }
 
-        val candles = historyResult.candlesticks
+        if (historyResult is PriceHistoryResult.Success) {
+            val candles = historyResult.candlesticks
+            if (candles.size >= 50) {
+                val lastCandle = candles.last()
+                val lastPrice = lastCandle.close
+                val halfSpread = if (asset.decimalDigits == 4) 0.00005 else 0.01
+                val bid = lastPrice - halfSpread
+                val ask = lastPrice + halfSpread
+
+                val oneDayAgoCandle = candles.dropLast(24).lastOrNull()?.close ?: candles.first().close
+                val change24hPercent = if (oneDayAgoCandle > 0) {
+                    ((lastPrice - oneDayAgoCandle) / oneDayAgoCandle) * 100.0
+                } else {
+                    0.0
+                }
+
+                val last24h = candles.takeLast(24)
+                return RawMarketData(
+                    symbol = asset.symbol,
+                    lastPrice = lastPrice,
+                    bid = bid,
+                    ask = ask,
+                    bidAskIsEstimated = true,
+                    change24hPercent = change24hPercent,
+                    change24hIsAvailable = oneDayAgoCandle > 0,
+                    high24h = if (last24h.isNotEmpty()) last24h.maxOf { it.high } else lastPrice,
+                    low24h = if (last24h.isNotEmpty()) last24h.minOf { it.low } else lastPrice,
+                    volume24h = "Genuine Forex Feed (${candles.size}h)",
+                    historyCandles = candles,
+                    timestampSeconds = lastCandle.timestamp / 1000L,
+                    sourceProvider = "Genuine Forex OHLC API (${historyResult.source})"
+                )
+            }
+        }
+
+        // 2. Genuine fallback via Yahoo Finance Chart API (no API key required)
+        return fetchForexFromYahoo(asset)
+    }
+
+    private fun fetchForexFromYahoo(asset: MarketAsset): RawMarketData {
+        val cleanSymbol = asset.symbol.replace("/", "").replace(" ", "").trim().uppercase()
+        val yahooSymbol = "$cleanSymbol=X"
+        val url = "https://query2.finance.yahoo.com/v8/finance/chart/$yahooSymbol?interval=1h&range=1mo"
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Android; CashFlowAI)")
+            .build()
+        val json = client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("Yahoo Finance Forex HTTP ${resp.code} for $yahooSymbol")
+            JSONObject(resp.body?.string() ?: throw IOException("Empty body"))
+        }
+
+        val chartObj = json.optJSONObject("chart")
+        val resArr = chartObj?.optJSONArray("result")
+        if (resArr == null || resArr.length() == 0) {
+            throw IOException("No chart result for $yahooSymbol")
+        }
+        val res = resArr.getJSONObject(0)
+        val meta = res.getJSONObject("meta")
+        val price = meta.getDouble("regularMarketPrice")
+        val prevClose = meta.optDouble("chartPreviousClose", meta.optDouble("previousClose", price))
+        val high = meta.optDouble("regularMarketDayHigh", price)
+        val low = meta.optDouble("regularMarketDayLow", price)
+        val timeSec = meta.getLong("regularMarketTime")
+
+        val changePercent = if (prevClose > 0) ((price - prevClose) / prevClose) * 100.0 else 0.0
+        val candles = mutableListOf<PriceCandlestick>()
+        try {
+            val quotesObj = res.getJSONObject("indicators").getJSONArray("quote").getJSONObject(0)
+            val timestampsArr = res.getJSONArray("timestamp")
+            val closeArr = quotesObj.optJSONArray("close")
+            val openArr = quotesObj.optJSONArray("open")
+            val highArr = quotesObj.optJSONArray("high")
+            val lowArr = quotesObj.optJSONArray("low")
+
+            if (closeArr != null && timestampsArr != null) {
+                for (i in 0 until closeArr.length()) {
+                    if (closeArr.isNull(i)) continue
+                    val close = closeArr.getDouble(i)
+                    val open = if (openArr != null && i < openArr.length() && !openArr.isNull(i)) openArr.getDouble(i) else close
+                    val hi = if (highArr != null && i < highArr.length() && !highArr.isNull(i)) highArr.getDouble(i) else close
+                    val lo = if (lowArr != null && i < lowArr.length() && !lowArr.isNull(i)) lowArr.getDouble(i) else close
+                    val actualHi = maxOf(hi, maxOf(open, close))
+                    val actualLo = minOf(lo, minOf(open, close))
+                    val ts = timestampsArr.getLong(i) * 1000L
+                    if (open > 0 && actualHi >= maxOf(open, close) && actualLo <= minOf(open, close) && close > 0) {
+                        candles.add(PriceCandlestick(ts, open, actualHi, actualLo, close, null))
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
         if (candles.size < 50) {
-            throw IOException("Insufficient forex history: ${candles.size} candles, need ≥50")
+            throw IOException("Insufficient forex candles from Yahoo Finance for ${asset.symbol}: ${candles.size}, need ≥50")
         }
 
-        val lastCandle = candles.last()
-        val lastPrice = lastCandle.close
-
-        // Bid/Ask are ESTIMATES for forex (0.5 pip spread = 0.00005)
-        val halfSpread = 0.00005
-        val bid = lastPrice - halfSpread
-        val ask = lastPrice + halfSpread
-
-        // Calculate 24h change from historical data
-        val oneDayAgoCandle = candles.dropLast(24).lastOrNull()?.close ?: lastPrice
-        val change24hPercent = if (oneDayAgoCandle > 0) {
-            ((lastPrice - oneDayAgoCandle) / oneDayAgoCandle) * 100.0
-        } else {
-            0.0  // Fallback to 0 if not calculable (don't invent)
-        }
+        val halfSpread = if (asset.decimalDigits == 4) 0.00005 else 0.01
+        val lastPrice = candles.last().close
+        val last24h = candles.takeLast(24)
 
         return RawMarketData(
             symbol = asset.symbol,
             lastPrice = lastPrice,
-            bid = bid,
-            ask = ask,
-            bidAskIsEstimated = true,  // MARK as estimate
-            change24hPercent = change24hPercent,
-            change24hIsAvailable = oneDayAgoCandle > 0,  // Only available if we have 1d history
-            high24h = candles.maxOf { it.high },
-            low24h = candles.minOf { it.low },
-            volume24h = "Real Forex Feed",
-            historyCandles = candles,  // Full genuine OHLC
-            timestampSeconds = lastCandle.timestamp / 1000L,
-            sourceProvider = "Genuine Forex OHLC API (Finnhub/Alpha Vantage)"
+            bid = lastPrice - halfSpread,
+            ask = lastPrice + halfSpread,
+            bidAskIsEstimated = true,
+            change24hPercent = changePercent,
+            change24hIsAvailable = true,
+            high24h = if (last24h.isNotEmpty()) last24h.maxOf { it.high } else high,
+            low24h = if (last24h.isNotEmpty()) last24h.minOf { it.low } else low,
+            volume24h = "Genuine Forex Feed (${candles.size}h)",
+            historyCandles = candles.takeLast(120),
+            timestampSeconds = timeSec,
+            sourceProvider = "Yahoo Finance Genuine Forex Feed"
         )
     }
 
