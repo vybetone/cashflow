@@ -17,11 +17,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -32,10 +37,16 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MilitaryTech
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TrendingUp
@@ -64,18 +75,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.AssistantChatMessage
@@ -85,7 +102,12 @@ import com.example.data.MarketAsset
 import com.example.data.MarketCategory
 import com.example.data.MarketUniverse
 import com.example.data.TradingSignalEntity
+import com.example.ui.ChatExportHelper
 import com.example.ui.CashFlowViewModel
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -94,6 +116,7 @@ fun AiAnalyticsScreen(
     modifier: Modifier = Modifier
 ) {
     var screenSubTab by remember { mutableIntStateOf(0) } // 0: AI Trading Assistant, 1: Quant Accuracy Matrix
+    var isChatFullscreenOnMobile by remember { mutableStateOf(false) }
 
     val selectedCategory by viewModel.selectedMarketCategory.collectAsState()
     val selectedAsset by viewModel.selectedMarketAsset.collectAsState()
@@ -263,78 +286,177 @@ fun AiAnalyticsScreen(
                                 onSendMessage = { viewModel.sendAssistantChatMessage(it) },
                                 onClearChat = { viewModel.clearAssistantChat() },
                                 darkCardBg = darkCardBg,
-                                greenColor = greenColor
+                                greenColor = greenColor,
+                                isFullscreen = true,
+                                onToggleFullscreen = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .imePadding()
                             )
                         }
                     }
                 } else {
-                    // Compact Mobile Vertical View
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(14.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        MarketUniverseHeader(
-                            selectedCategory = selectedCategory,
-                            onSelectCategory = { viewModel.setMarketCategory(it) },
-                            connectionState = marketConnState,
-                            isLoading = isMarketLoading,
-                            errorMessage = marketErrorMsg,
-                            onRefresh = { viewModel.refreshMarketData() }
-                        )
+                    // Compact Mobile View
+                    if (isChatFullscreenOnMobile) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { isChatFullscreenOnMobile = false },
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, greenColor.copy(alpha = 0.5f)),
+                                    modifier = Modifier.testTag("btn_back_to_telemetry")
+                                ) {
+                                    Text(
+                                        text = "← BACK TO TELEMETRY DASHBOARD",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = greenColor
+                                    )
+                                }
+                            }
 
-                        LiveTickerCarousel(
-                            category = selectedCategory,
-                            quotes = allQuotes,
-                            selectedAsset = selectedAsset,
-                            onSelectAsset = { viewModel.setSelectedMarketAsset(it) }
-                        )
+                            AssistantChatPanel(
+                                messages = chatMessages,
+                                isAiRunning = isAiRunning,
+                                currentAsset = selectedAsset,
+                                onSendMessage = { viewModel.sendAssistantChatMessage(it) },
+                                onClearChat = { viewModel.clearAssistantChat() },
+                                darkCardBg = darkCardBg,
+                                greenColor = greenColor,
+                                isFullscreen = true,
+                                onToggleFullscreen = { isChatFullscreenOnMobile = false },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .imePadding()
+                            )
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            // View Mode Selector on Mobile: Telemetry vs Full Chat
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = true,
+                                    onClick = { /* already on telemetry */ },
+                                    label = {
+                                        Text(
+                                            text = "TELEMETRY & SIGNALS",
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = greenColor.copy(alpha = 0.2f),
+                                        selectedLabelColor = greenColor
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("chip_view_telemetry")
+                                )
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { isChatFullscreenOnMobile = true },
+                                    label = {
+                                        Text(
+                                            text = "AI CHAT ASSISTANT",
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = Color(0xFF131822),
+                                        labelColor = Color(0xFF90A4AE)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("chip_view_full_chat")
+                                )
+                            }
 
-                        TelemetryDataHudCard(
-                            quote = currentQuote,
-                            darkCardBg = darkCardBg,
-                            greenColor = greenColor,
-                            cyanColor = cyanColor,
-                            goldColor = goldColor,
-                            redColor = redColor
-                        )
+                            MarketUniverseHeader(
+                                selectedCategory = selectedCategory,
+                                onSelectCategory = { viewModel.setMarketCategory(it) },
+                                connectionState = marketConnState,
+                                isLoading = isMarketLoading,
+                                errorMessage = marketErrorMsg,
+                                onRefresh = { viewModel.refreshMarketData() }
+                            )
 
-                        EvidenceSignalGeneratorCard(
-                            quote = currentQuote,
-                            isRunning = isAiRunning,
-                            statusText = statusText,
-                            signal = latestSignal,
-                            onGenerateSignal = { viewModel.runAiMarketAnalysis() },
-                            darkCardBg = darkCardBg,
-                            greenColor = greenColor,
-                            redColor = redColor,
-                            goldColor = goldColor
-                        )
+                            LiveTickerCarousel(
+                                category = selectedCategory,
+                                quotes = allQuotes,
+                                selectedAsset = selectedAsset,
+                                onSelectAsset = { viewModel.setSelectedMarketAsset(it) }
+                            )
 
-                        BrokerExecutionPipelineCard(
-                            activeBroker = activeBroker,
-                            brokerStatus = brokerStatus,
-                            signal = latestSignal,
-                            feedbackMessage = feedbackMessage,
-                            onExecuteTrade = { vol -> viewModel.executeEvidenceSignalOnActiveBroker(vol) },
-                            onToggleAutoTrade = { viewModel.toggleBrokerAutoTrade(it) },
-                            onClearFeedback = { viewModel.clearBrokerFeedbackMessage() },
-                            darkCardBg = darkCardBg,
-                            greenColor = greenColor
-                        )
+                            TelemetryDataHudCard(
+                                quote = currentQuote,
+                                darkCardBg = darkCardBg,
+                                greenColor = greenColor,
+                                cyanColor = cyanColor,
+                                goldColor = goldColor,
+                                redColor = redColor
+                            )
 
-                        AssistantChatPanel(
-                            messages = chatMessages,
-                            isAiRunning = isAiRunning,
-                            currentAsset = selectedAsset,
-                            onSendMessage = { viewModel.sendAssistantChatMessage(it) },
-                            onClearChat = { viewModel.clearAssistantChat() },
-                            darkCardBg = darkCardBg,
-                            greenColor = greenColor,
-                            modifier = Modifier.height(380.dp)
-                        )
+                            EvidenceSignalGeneratorCard(
+                                quote = currentQuote,
+                                isRunning = isAiRunning,
+                                statusText = statusText,
+                                signal = latestSignal,
+                                onGenerateSignal = { viewModel.runAiMarketAnalysis() },
+                                darkCardBg = darkCardBg,
+                                greenColor = greenColor,
+                                redColor = redColor,
+                                goldColor = goldColor
+                            )
+
+                            BrokerExecutionPipelineCard(
+                                activeBroker = activeBroker,
+                                brokerStatus = brokerStatus,
+                                signal = latestSignal,
+                                feedbackMessage = feedbackMessage,
+                                onExecuteTrade = { vol -> viewModel.executeEvidenceSignalOnActiveBroker(vol) },
+                                onToggleAutoTrade = { viewModel.toggleBrokerAutoTrade(it) },
+                                onClearFeedback = { viewModel.clearBrokerFeedbackMessage() },
+                                darkCardBg = darkCardBg,
+                                greenColor = greenColor
+                            )
+
+                            AssistantChatPanel(
+                                messages = chatMessages,
+                                isAiRunning = isAiRunning,
+                                currentAsset = selectedAsset,
+                                onSendMessage = { viewModel.sendAssistantChatMessage(it) },
+                                onClearChat = { viewModel.clearAssistantChat() },
+                                darkCardBg = darkCardBg,
+                                greenColor = greenColor,
+                                isFullscreen = false,
+                                onToggleFullscreen = { isChatFullscreenOnMobile = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(440.dp)
+                            )
+                        }
                     }
                 }
             } else if (screenSubTab == 1) {
@@ -1273,9 +1395,36 @@ private fun AssistantChatPanel(
     onClearChat: () -> Unit,
     darkCardBg: Color,
     greenColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var chatInputText by remember { mutableStateOf("") }
+
+    val isAtBottom by remember {
+        derivedStateOf {
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems <= 1) true
+            else {
+                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                lastVisible >= totalItems - 2
+            }
+        }
+    }
+    var previousCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            val lastIsUser = messages.lastOrNull()?.isUser == true
+            if (isAtBottom || lastIsUser || previousCount == 0) {
+                listState.animateScrollToItem(messages.size - 1)
+            }
+        }
+        previousCount = messages.size
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -1286,39 +1435,145 @@ private fun AssistantChatPanel(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
+            // Header: Title, Message Counter, and Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Psychology, contentDescription = null, tint = greenColor, modifier = Modifier.size(18.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Psychology,
+                        contentDescription = "AI Assistant",
+                        tint = greenColor,
+                        modifier = Modifier.size(20.dp)
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "AI TRADING ASSISTANT CHAT",
+                        text = "AI TRADING ASSISTANT",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
                         ),
                         color = Color.White
                     )
+                    if (messages.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            color = greenColor.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, greenColor.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "${messages.size}",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = greenColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
                 }
 
-                Text(
-                    text = "CLEAR",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = Color(0xFF90A4AE),
-                    modifier = Modifier.clickable { onClearChat() }
-                )
+                // Action Bar: Toggle Fullscreen, Copy Conversation, Share Conversation, Clear
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (onToggleFullscreen != null) {
+                        IconButton(
+                            onClick = onToggleFullscreen,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("btn_toggle_fullscreen_chat")
+                        ) {
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                contentDescription = if (isFullscreen) "Minimize Chat" else "Expand Fullscreen Chat",
+                                tint = Color(0xFF90CAF9),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (messages.isEmpty()) {
+                                android.widget.Toast.makeText(context, "No messages to copy yet", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                val exportText = ChatExportHelper.formatConversationForExport(messages)
+                                ChatExportHelper.copyTextToClipboard(
+                                    context = context,
+                                    text = exportText,
+                                    label = "Cash Flow AI Conversation",
+                                    feedbackMessage = "Conversation copied to clipboard"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("btn_copy_conversation")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy full conversation",
+                            tint = if (messages.isNotEmpty()) Color(0xFF80CBC4) else Color(0xFF455A64),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (messages.isEmpty()) {
+                                android.widget.Toast.makeText(context, "No messages to share yet", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                val exportText = ChatExportHelper.formatConversationForExport(messages)
+                                ChatExportHelper.shareText(
+                                    context = context,
+                                    text = exportText,
+                                    subject = "CASH FLOW AI Trading Chat Export",
+                                    chooserTitle = "Share Conversation"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("btn_share_conversation")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share full conversation",
+                            tint = if (messages.isNotEmpty()) Color(0xFF80CBC4) else Color(0xFF455A64),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onClearChat,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("btn_clear_assistant_chat")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Clear chat history",
+                            tint = Color(0xFFEF5350),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Quick Prompt Chips
             LazyRow(
@@ -1355,63 +1610,255 @@ private fun AssistantChatPanel(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Scrollable Message Stream
-            Column(
+            // Independently Scrollable Message Stream
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                messages.forEach { msg ->
-                    val isUser = msg.isUser
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                if (messages.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Surface(
-                            color = if (isUser) Color(0xFF1565C0) else Color(0xFF161E2E),
-                            shape = RoundedCornerShape(10.dp),
-                            border = if (!isUser) BorderStroke(1.dp, Color(0xFF263238)) else null,
-                            modifier = Modifier.fillMaxWidth(0.92f)
+                            color = greenColor.copy(alpha = 0.1f),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, greenColor.copy(alpha = 0.3f))
                         ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(
-                                    text = if (isUser) "You" else "CASH FLOW AI Assistant",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 9.sp
-                                    ),
-                                    color = if (isUser) Color(0xFF90CAF9) else greenColor
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = msg.text,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                    color = Color.White
+                            Box(modifier = Modifier.padding(14.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.Psychology,
+                                    contentDescription = null,
+                                    tint = greenColor,
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "AI Trading Assistant Ready",
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Ask about ${currentAsset.symbol} setups, RSI momentum, stop loss targets, or broker execution.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = Color(0xFF90A4AE),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    val timeFormatter = remember {
+                        SimpleDateFormat("h:mm a", Locale.US)
+                    }
+
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("chat_messages_list"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(messages, key = { it.id }) { msg ->
+                            val isUser = msg.isUser
+                            val formattedTime = try {
+                                timeFormatter.format(Date(msg.timestamp))
+                            } catch (e: Exception) {
+                                ""
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                            ) {
+                                Surface(
+                                    color = if (isUser) Color(0xFF1565C0) else Color(0xFF161E2E),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = if (!isUser) BorderStroke(1.dp, Color(0xFF263238)) else null,
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.92f)
+                                        .testTag("chat_bubble_${msg.id}")
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        // Header Row: Attribution & Timestamp
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = if (isUser) "You" else "CASH FLOW AI Assistant",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontSize = 10.sp
+                                                    ),
+                                                    color = if (isUser) Color(0xFF90CAF9) else greenColor
+                                                )
+                                                if (!msg.associatedSymbol.isNullOrBlank()) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Surface(
+                                                        color = Color(0xFF263238),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "${msg.associatedSymbol}${if (!msg.signalAction.isNullOrBlank()) " ${msg.signalAction}" else ""}",
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontSize = 8.sp,
+                                                                fontFamily = FontFamily.Monospace,
+                                                                fontWeight = FontWeight.Bold
+                                                            ),
+                                                            color = Color(0xFFFFD54F),
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            if (formattedTime.isNotBlank()) {
+                                                Text(
+                                                    text = formattedTime,
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontSize = 9.sp,
+                                                        fontFamily = FontFamily.Monospace
+                                                    ),
+                                                    color = Color(0xFF78909C)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        // Message Body
+                                        Text(
+                                            text = msg.text,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                                            color = Color.White
+                                        )
+
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        // Individual Message Action Buttons: Copy & Share
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.End,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            IconButton(
+                                                onClick = {
+                                                    val formatted = ChatExportHelper.formatMessageForExport(msg)
+                                                    ChatExportHelper.copyTextToClipboard(
+                                                        context = context,
+                                                        text = formatted,
+                                                        label = if (isUser) "User Message" else "AI Assistant Response",
+                                                        feedbackMessage = "Message copied to clipboard"
+                                                    )
+                                                },
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .testTag("btn_copy_message_${msg.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ContentCopy,
+                                                    contentDescription = "Copy message",
+                                                    tint = Color(0xFF90A4AE),
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+
+                                            IconButton(
+                                                onClick = {
+                                                    val formatted = ChatExportHelper.formatMessageForExport(msg)
+                                                    ChatExportHelper.shareText(
+                                                        context = context,
+                                                        text = formatted,
+                                                        subject = if (isUser) "User Question" else "AI Trade Recommendation",
+                                                        chooserTitle = "Share Message"
+                                                    )
+                                                },
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .testTag("btn_share_message_${msg.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Share,
+                                                    contentDescription = "Share message",
+                                                    tint = Color(0xFF90A4AE),
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Floating "Scroll to Bottom" Button when user has scrolled up
+                if (!isAtBottom && messages.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 6.dp, end = 6.dp)
+                            .clickable {
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(messages.size - 1)
+                                }
+                            }
+                            .testTag("btn_scroll_to_bottom"),
+                        color = Color(0xFF1E2638),
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, greenColor.copy(alpha = 0.5f)),
+                        shadowElevation = 4.dp
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Scroll to latest message",
+                                tint = greenColor,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Input Bar
+            // Input Composer Bar: Resilient multiline input with ImeAction.Send & 48dp Send button
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
                 OutlinedTextField(
                     value = chatInputText,
                     onValueChange = { chatInputText = it },
-                    placeholder = { Text("Ask assistant about setups, risk, broker execution...", fontSize = 11.sp) },
+                    placeholder = {
+                        Text(
+                            text = "Ask assistant about setups, risk, broker execution...",
+                            fontSize = 11.sp,
+                            color = Color(0xFF78909C)
+                        )
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("input_assistant_chat"),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = greenColor,
                         unfocusedBorderColor = Color(0xFF37474F),
@@ -1420,7 +1867,21 @@ private fun AssistantChatPanel(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White
                     ),
-                    maxLines = 2
+                    minLines = 1,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Send,
+                        keyboardType = KeyboardType.Text
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (chatInputText.isNotBlank()) {
+                                val text = chatInputText.trim()
+                                chatInputText = ""
+                                onSendMessage(text)
+                            }
+                        }
+                    )
                 )
 
                 Spacer(modifier = Modifier.width(6.dp))
@@ -1428,21 +1889,45 @@ private fun AssistantChatPanel(
                 IconButton(
                     onClick = {
                         if (chatInputText.isNotBlank()) {
-                            val text = chatInputText
+                            val text = chatInputText.trim()
                             chatInputText = ""
                             onSendMessage(text)
                         }
                     },
                     modifier = Modifier
+                        .size(48.dp)
                         .background(greenColor, CircleShape)
-                        .size(44.dp)
                         .testTag("btn_send_assistant_chat")
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.Black, modifier = Modifier.size(18.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send message",
+                        tint = Color.Black,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }
     }
+}
+
+@Composable
+internal fun AssistantChatPanelForTesting(
+    messages: List<AssistantChatMessage>,
+    onSendMessage: (String) -> Unit,
+    onClearChat: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AssistantChatPanel(
+        messages = messages,
+        isAiRunning = false,
+        currentAsset = MarketUniverse.EUR_USD,
+        onSendMessage = onSendMessage,
+        onClearChat = onClearChat,
+        darkCardBg = Color(0xFF131822),
+        greenColor = Color(0xFF00E676),
+        modifier = modifier
+    )
 }
 
 // -------------------------------------------------------------

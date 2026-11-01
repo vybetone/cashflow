@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -322,6 +325,9 @@ fun CashFlowApp(
             }
         } else {
             // Phone Layout (Compact width < 600dp)
+            val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+            val isImeVisible = imeBottom > 0.dp
+
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 topBar = {
@@ -382,11 +388,12 @@ fun CashFlowApp(
                     )
                 },
                 bottomBar = {
-                    NavigationBar(
-                        containerColor = surfaceColor,
-                        contentColor = textColor,
-                        modifier = Modifier.testTag("cashflow_bottom_nav")
-                    ) {
+                    if (!isImeVisible) {
+                        NavigationBar(
+                            containerColor = surfaceColor,
+                            contentColor = textColor,
+                            modifier = Modifier.testTag("cashflow_bottom_nav")
+                        ) {
                         val itemColors = NavigationBarItemDefaults.colors(
                             selectedIconColor = greenColor,
                             selectedTextColor = greenColor,
@@ -459,7 +466,8 @@ fun CashFlowApp(
                         )
                     }
                 }
-            ) { paddingValues ->
+            }
+        ) { paddingValues ->
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
